@@ -1,0 +1,82 @@
+#!/bin/sh
+set -u
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    printf '%s\n' 'mutation-test: not inside a Git worktree' >&2
+    exit 2
+}
+cd "$ROOT" || exit 2
+
+RECEIPT=${MUTATION_TEST_RECEIPT:-${RUNNER_TEMP:-/tmp}/mutation-test-receipt.json}
+TMP_BASE=${RUNNER_TEMP:-/tmp}
+WORK_DIR=$(mktemp -d "$TMP_BASE/mutation-test.XXXXXX") || exit 2
+SOURCE_SHA=$(git rev-parse HEAD) || exit 2
+export SOURCE_SHA RECEIPT
+MUTMUT_RUN_EXIT=0
+export MUTMUT_RUN_EXIT
+cleanup() {
+    rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
+git archive HEAD | tar -x -C "$WORK_DIR" || exit 2
+cd "$WORK_DIR" || exit 2
+
+set +e
+mutmut run --max-children 2 >mutmut-run.log 2>&1
+run_code=$?
+MUTMUT_RUN_EXIT=$run_code
+export MUTMUT_RUN_EXIT
+mutmut export-cicd-stats >mutmut-export.log 2>&1
+export_code=$?
+set -e
+
+if [ "$export_code" -ne 0 ] || [ ! -f mutants/mutmut-cicd-stats.json ]; then
+    python - <<'PY'
+import json, os
+from pathlib import Path
+receipt={
+    "schema_version":1,
+    "status":"MUTATION_RUNTIME_FAILED",
+    "source_sha":os.environ["SOURCE_SHA"],
+    "engine":{"name":"mutmut","version":"3.8.0"},
+    "error":"mutmut CI stats export failed or receipt was missing",
+}
+Path(os.environ["RECEIPT"]).write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
+PY
+    cat mutmut-run.log >&2 || true
+    cat mutmut-export.log >&2 || true
+    exit 2
+fi
+
+cp mutants/mutmut-cicd-stats.json "$WORK_DIR/raw-stats.json"
+python - <<'PY'
+import json, os
+from pathlib import Path
+stats=json.loads(Path("mutants/mutmut-cicd-stats.json").read_text())
+incomplete_keys=("no_tests","suspicious","timeout","check_was_interrupted_by_user","segfault")
+if any(int(stats.get(key,0)) for key in incomplete_keys):
+    status="MUTATION_INCOMPLETE"
+    code=2
+elif int(stats.get("survived",0)):
+    status="SURVIVORS_PRESENT"
+    code=1
+else:
+    status="MUTATION_CLEAN"
+    code=0
+receipt={
+    "schema_version":1,
+    "status":status,
+    "source_sha":os.environ["SOURCE_SHA"],
+    "engine":{"name":"mutmut","version":"3.8.0"},
+    "scope":{"only_mutate":"forum_state.py","tests":"tests/test_durable_state.py"},
+    "mutmut_run_exit":int(os.environ.get("MUTMUT_RUN_EXIT","0")),
+    "stats":stats,
+}
+Path(os.environ["RECEIPT"]).write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
+print(f"MUTATION_TEST_STATUS {status}")
+print("MUTATION_TEST_STATS " + " ".join(f"{k}={stats.get(k,0)}" for k in ("total","killed","survived","no_tests","suspicious","timeout","segfault")))
+raise SystemExit(code)
+PY
