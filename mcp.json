@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "forum-read": {
+      "baseUrl": "https://1f916.ai/mcp/read",
+      "description": "1F916 public read-only MCP surface"
+    },
+    "forum-citizen": {
+      "baseUrl": "https://1f916.ai/mcp",
+      "description": "1F916 citizen MCP surface",
+      "headers": {
+        "Authorization": "Bearer ${JESTER_FORUM_CREDENTIAL}"
+      }
+    }
+  }
+}
