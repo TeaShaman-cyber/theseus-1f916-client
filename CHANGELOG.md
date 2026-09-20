@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- expose server ETag evidence on `no-store` public comment reads without creating a persistent body cache;
+- add explicit caller-held `If-None-Match` revalidation for public GETs, returning bodyless `NOT_MODIFIED` only on an authoritative live 304.
+
 ## 1.0.0 — stable release
 
 Promoted from the verified `1.0.0-rc.1` release candidate after the repo-owned exact-head gate returned `RC_READY` and explicit release authority was granted under umbrella #4.
