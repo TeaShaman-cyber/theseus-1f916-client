@@ -47,16 +47,41 @@ class ForumRoutingTests(unittest.TestCase):
         cls.forum = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.forum)
 
+    def test_build_call_uses_logical_transport_surfaces(self):
+        cases = {
+            "watch": "citizen",
+            "inbox": "citizen",
+            "front": "read",
+            "thread": "read",
+            "search": "read",
+            "citizen": "read",
+        }
+        argv = {
+            "watch": ["watch"],
+            "inbox": ["inbox"],
+            "front": ["front"],
+            "thread": ["thread", "2129"],
+            "search": ["search", "continuity"],
+            "citizen": ["citizen", "lad-codex"],
+        }
+        for command, expected_surface in cases.items():
+            with self.subTest(command=command):
+                surface, _operation, _payload = self.forum.build_call(
+                    self.forum.parse_args(argv[command])
+                )
+                self.assertEqual(surface, expected_surface)
+                self.assertNotIn(surface, {"forum-read", "forum-citizen"})
+
     def test_build_call_routes_reads_and_citizen_actions(self):
         self.assertTrue(hasattr(self.forum, "parse_args"), "parse_args contract is missing")
         self.assertTrue(hasattr(self.forum, "build_call"), "build_call contract is missing")
         cases = [
-            (["watch"], ("forum-citizen", "pulse", {})),
-            (["inbox"], ("forum-citizen", "me", {"cursor_mode": "id"})),
-            (["front"], ("forum-read", "front_page", {"order": "new", "limit": 25})),
-            (["thread", "2129"], ("forum-read", "read_post", {"post_id": 2129})),
-            (["search", "continuity"], ("forum-read", "search", {"query": "continuity"})),
-            (["citizen", "lad-codex"], ("forum-read", "citizen", {"handle": "lad-codex"})),
+            (["watch"], ("citizen", "pulse", {})),
+            (["inbox"], ("citizen", "me", {"cursor_mode": "id"})),
+            (["front"], ("read", "front_page", {"order": "new", "limit": 25})),
+            (["thread", "2129"], ("read", "read_post", {"post_id": 2129})),
+            (["search", "continuity"], ("read", "search", {"query": "continuity"})),
+            (["citizen", "lad-codex"], ("read", "citizen", {"handle": "lad-codex"})),
         ]
         for argv, expected in cases:
             with self.subTest(argv=argv):
@@ -133,6 +158,14 @@ class ForumInvocationTests(unittest.TestCase):
         self.assertEqual(result["status"], "OK")
         self.assertEqual(seen["env"]["JESTER_FORUM_CREDENTIAL"], "demo-value")
 
+    def test_invoke_rejects_unknown_transport_surface_before_runner(self):
+        def runner(*args, **kwargs):
+            raise AssertionError("runner must not be called for an unknown surface")
+        result = self.forum.invoke("unknown", "pulse", {}, runner=runner, base_env={})
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(result["route"], "unknown.pulse")
+        self.assertIn("unknown transport surface", result["error"])
+
     def test_invoke_normalizes_common_failures(self):
         self.assertTrue(hasattr(self.forum, "invoke"), "invoke contract is missing")
         cases = [
@@ -168,7 +201,7 @@ class ForumExecutionTests(unittest.TestCase):
         args = self.forum.parse_args(["thread", "2129"])
         result = self.forum.execute(args, invoker=invoker)
         self.assertEqual(seen, {
-            "server": "forum-read",
+            "server": "read",
             "tool": "read_post",
             "payload": {"post_id": 2129},
         })
@@ -230,15 +263,15 @@ class ForumWriteAndStateTests(unittest.TestCase):
         expected = [
             (
                 ["comment", "--post", "2129", "--parent", "24315", "--body", "hello"],
-                ("forum-citizen", "comment", {"post_id": 2129, "parent_id": 24315, "body": "hello"}),
+                ("citizen", "comment", {"post_id": 2129, "parent_id": 24315, "body": "hello"}),
             ),
             (
                 ["post", "--title", "Title", "--body", "Body"],
-                ("forum-citizen", "post", {"title": "Title", "body": "Body"}),
+                ("citizen", "post", {"title": "Title", "body": "Body"}),
             ),
             (
                 ["vote", "comment", "24315"],
-                ("forum-citizen", "vote", {"target_type": "comment", "target_id": 24315}),
+                ("citizen", "vote", {"target_type": "comment", "target_id": 24315}),
             ),
         ]
         for argv, wanted in expected:
@@ -268,7 +301,7 @@ class ForumWriteAndStateTests(unittest.TestCase):
 
             for offered in offers:
                 def inbox_invoker(server, tool, payload, offered=offered, **kwargs):
-                    self.assertEqual((server, tool), ("forum-citizen", "me"))
+                    self.assertEqual((server, tool), ("citizen", "me"))
                     return {"status": "OK", "data": {"ack_cursor": offered}}
                 result = self.forum.execute(
                     self.forum.parse_args(["inbox"]), invoker=inbox_invoker, state_path=state
@@ -303,7 +336,7 @@ class ForumWriteAndStateTests(unittest.TestCase):
             )
             self.assertEqual(acked["status"], "WRITE_VERIFIED")
             self.assertFalse(state.exists())
-            self.assertEqual(calls[0], ("forum-citizen", "me_ack", {"up_to": floor}))
+            self.assertEqual(calls[0], ("citizen", "me_ack", {"up_to": floor}))
 
     def test_post_and_comment_writes_require_public_readback(self):
         import inspect
@@ -321,7 +354,7 @@ class ForumWriteAndStateTests(unittest.TestCase):
             invoker=post_invoker,
         )
         self.assertEqual(posted["status"], "WRITE_VERIFIED")
-        self.assertEqual(post_calls[-1][0:2], ("forum-read", "read_post"))
+        self.assertEqual(post_calls[-1][0:2], ("read", "read_post"))
 
         comment_calls = []
         def comment_invoker(server, tool, payload, **kwargs):
@@ -336,7 +369,7 @@ class ForumWriteAndStateTests(unittest.TestCase):
             invoker=comment_invoker,
         )
         self.assertEqual(commented["status"], "WRITE_VERIFIED")
-        self.assertEqual(comment_calls[-1][0:2], ("forum-read", "read_comment"))
+        self.assertEqual(comment_calls[-1][0:2], ("read", "read_comment"))
 
     def test_vote_verifies_target_vote_count_increased(self):
         import inspect
