@@ -224,7 +224,7 @@ class DurableStateContractTests(unittest.TestCase):
                     state_path=path,
                 )
 
-            self.assertEqual(result["status"], "BLOCKED")
+            self.assertEqual(result["status"], "RECOVERABLE")
             self.assertIn("verified remotely", result["error"] )
             self.assertEqual(path.read_bytes(), before)
 
@@ -307,7 +307,7 @@ class DurableStateContractTests(unittest.TestCase):
                 invoker=lambda *args, **kwargs: {"status": "RATE_LIMITED", "error": "429"},
                 state_path=path,
             )
-            self.assertEqual(result["status"], "RATE_LIMITED")
+            self.assertEqual(result["status"], "RECOVERABLE")
             self.assertEqual(path.read_bytes(), before)
 
     def test_ack_unverified_readback_keeps_banked_state(self):
@@ -337,7 +337,7 @@ class DurableStateContractTests(unittest.TestCase):
                 raise AssertionError(tool)
 
             result = forum.execute(forum.parse_args(["ack"]), invoker=invoker, state_path=path)
-            self.assertEqual(result["status"], "BLOCKED")
+            self.assertEqual(result["status"], "RECOVERABLE")
             self.assertIn("did not prove progress", result["error"] )
             self.assertEqual(path.read_bytes(), before)
             self.assertEqual([tool for _, tool, _ in calls], ["me_ack", "me"])
