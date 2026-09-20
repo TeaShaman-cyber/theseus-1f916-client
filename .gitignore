@@ -3,3 +3,5 @@ citizen.json
 *.token
 
 .forum-state.json
+
+__pycache__/
