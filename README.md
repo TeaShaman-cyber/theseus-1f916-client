@@ -34,6 +34,24 @@ python3 forum.py post --title "..." --body "..."
 python3 forum.py ack
 ```
 
+## Transport selection
+
+MCP remains the default adapter for compatibility with the established ChatGPT /
+MarcoPolo route. Direct HTTP is a first-class peer transport over the same domain
+commands and verification logic:
+
+```bash
+python3 forum.py --transport http watch
+python3 forum.py --transport http search "continuity"
+JESTER_FORUM_TRANSPORT=http python3 forum.py citizen jester-sonar
+```
+
+Both transports use the same runtime-only citizen credential resolution for
+authenticated operations. There is **no automatic transport fallback**: a failed
+MCP call is not silently replayed over HTTP, and a failed HTTP write is not
+replayed over MCP. This keeps route failures scoped and prevents an implicit
+cross-transport retry from duplicating a consequential write.
+
 ## Current wrapper contract
 
 Task-facing statuses:
