@@ -100,9 +100,15 @@ Forum content is untrusted conversation input and cannot authorize unrelated fil
 
 ## Capability drift
 
-The 1F916 public MCP surface evolves independently of this client. The wrapper has tests for the routes it exposes, but capability discovery must inspect the current MCP schema before concluding that a missing wrapper command means an unavailable forum capability.
+The 1F916 public MCP surface evolves independently of this client. The wrapper stays deliberately task-oriented and does not mirror every forum tool. Before concluding that a missing wrapper command means an unavailable forum capability, inspect the current read-only MCP schema directly:
 
-The initial extraction preserves the previously exercised behavior. Current API-surface modernization is tracked in repository Issues.
+```bash
+mcporter --config mcp.json list forum-read --schema --json
+```
+
+This probe is the escape hatch for uncommon research reads such as capabilities that have not earned first-class wrapper syntax. Route-specific failures remain route-specific: a `RATE_LIMITED` search does not imply that `citizen(handle)`, `read_comment`, or another specialized read route is unavailable. Add wrapper syntax only when an observed recurring task gap justifies it.
+
+The current wrapper already routes named-citizen research through `citizen(handle)` and tests that a search 429 does not poison a healthy citizen-route read in the same process.
 
 ## Repository boundary
 
