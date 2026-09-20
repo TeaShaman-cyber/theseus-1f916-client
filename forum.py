@@ -168,17 +168,23 @@ def citizen_env(base=None, load_value=None):
     return env
 
 
+def _ack_cursor_leq(left, right):
+    return all(
+        int(left[field]) <= int(right[field])
+        for field in ("timestamp", "comments", "mentions")
+    )
+
+
 def merge_ack_cursor(current, offered):
     if current is None:
         return dict(offered)
     if current.get("version") != offered.get("version"):
         raise ValueError("ack cursor version changed")
-    return {
-        "version": current["version"],
-        "timestamp": min(int(current["timestamp"]), int(offered["timestamp"])),
-        "comments": min(int(current["comments"]), int(offered["comments"])),
-        "mentions": min(int(current["mentions"]), int(offered["mentions"])),
-    }
+    if _ack_cursor_leq(current, offered):
+        return dict(current)
+    if _ack_cursor_leq(offered, current):
+        return dict(offered)
+    raise ValueError("ack cursors are not safely ordered; refusing to synthesize cursor")
 
 
 def _load_state(state_path):

@@ -289,14 +289,103 @@ class ForumWriteAndStateTests(unittest.TestCase):
                 args = self.forum.parse_args(argv)
                 self.assertEqual(self.forum.build_call(args), wanted)
 
-    def test_ack_cursor_floor_keeps_minimum_processed_offer(self):
+    def test_ack_cursor_floor_keeps_exact_minimum_offered_cursor_with_seal(self):
         self.assertTrue(hasattr(self.forum, "merge_ack_cursor"), "merge_ack_cursor contract is missing")
-        a = {"version": 1, "timestamp": 100, "comments": 50, "mentions": 20}
-        b = {"version": 1, "timestamp": 120, "comments": 45, "mentions": 25}
-        self.assertEqual(
-            self.forum.merge_ack_cursor(a, b),
-            {"version": 1, "timestamp": 100, "comments": 45, "mentions": 20},
-        )
+        older = {
+            "version": 1,
+            "timestamp": 100,
+            "comments": 10,
+            "mentions": 20,
+            "seal": "seal-older",
+        }
+        newer = {
+            "version": 1,
+            "timestamp": 120,
+            "comments": 10,
+            "mentions": 20,
+            "seal": "seal-newer",
+        }
+        merged = self.forum.merge_ack_cursor(older, newer)
+        self.assertEqual(merged, older)
+        self.assertEqual(merged["seal"], "seal-older")
+        self.assertIsNot(merged, older)
+
+    def test_ack_cursor_floor_can_move_to_exact_lower_later_offer(self):
+        current = {
+            "version": 1,
+            "timestamp": 120,
+            "comments": 50,
+            "mentions": 25,
+            "seal": "seal-current",
+        }
+        lower = {
+            "version": 1,
+            "timestamp": 100,
+            "comments": 45,
+            "mentions": 20,
+            "seal": "seal-lower",
+        }
+        self.assertEqual(self.forum.merge_ack_cursor(current, lower), lower)
+
+    def test_ack_cursor_floor_refuses_incomparable_offers_instead_of_synthesizing(self):
+        a = {
+            "version": 1,
+            "timestamp": 100,
+            "comments": 50,
+            "mentions": 20,
+            "seal": "seal-a",
+        }
+        b = {
+            "version": 1,
+            "timestamp": 120,
+            "comments": 45,
+            "mentions": 25,
+            "seal": "seal-b",
+        }
+        with self.assertRaisesRegex(ValueError, "not safely ordered"):
+            self.forum.merge_ack_cursor(a, b)
+
+    def test_inbox_refuses_incomparable_sealed_offers_and_keeps_prior_state(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            state = pathlib.Path(td) / "state.json"
+            first = {
+                "version": 1,
+                "timestamp": 100,
+                "comments": 50,
+                "mentions": 20,
+                "seal": "seal-first",
+            }
+            second = {
+                "version": 1,
+                "timestamp": 120,
+                "comments": 45,
+                "mentions": 25,
+                "seal": "seal-second",
+            }
+
+            first_result = self.forum.execute(
+                self.forum.parse_args(["inbox"]),
+                invoker=lambda *args, **kwargs: {
+                    "status": "OK",
+                    "data": {"ack_cursor": first},
+                },
+                state_path=state,
+            )
+            self.assertEqual(first_result["status"], "OK")
+
+            second_result = self.forum.execute(
+                self.forum.parse_args(["inbox"]),
+                invoker=lambda *args, **kwargs: {
+                    "status": "OK",
+                    "data": {"ack_cursor": second},
+                },
+                state_path=state,
+            )
+            self.assertEqual(second_result["status"], "BLOCKED")
+            self.assertIn("not safely ordered", second_result["error"] )
+            self.assertEqual(json.loads(state.read_text())["pending_ack"], first)
 
     def test_inbox_persists_ack_floor_and_ack_verifies_readback(self):
         import inspect
@@ -305,8 +394,20 @@ class ForumWriteAndStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             state = pathlib.Path(td) / "state.json"
             offers = [
-                {"version": 1, "timestamp": 100, "comments": 50, "mentions": 20},
-                {"version": 1, "timestamp": 120, "comments": 45, "mentions": 25},
+                {
+                    "version": 1,
+                    "timestamp": 100,
+                    "comments": 45,
+                    "mentions": 20,
+                    "seal": "seal-floor",
+                },
+                {
+                    "version": 1,
+                    "timestamp": 120,
+                    "comments": 45,
+                    "mentions": 20,
+                    "seal": "seal-later",
+                },
             ]
 
             for offered in offers:
@@ -319,8 +420,9 @@ class ForumWriteAndStateTests(unittest.TestCase):
                 self.assertEqual(result["status"], "OK")
 
             saved = json.loads(state.read_text())["pending_ack"]
-            floor = {"version": 1, "timestamp": 100, "comments": 45, "mentions": 20}
+            floor = offers[0]
             self.assertEqual(saved, floor)
+            self.assertEqual(saved["seal"], "seal-floor")
 
             calls = []
             def ack_invoker(server, tool, payload, **kwargs):
