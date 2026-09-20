@@ -23,21 +23,128 @@ class HttpTransportContractTests(unittest.TestCase):
         cls.http = load(HTTP, "forum_http_transport")
         cls.forum = load(FORUM, "forum_with_transports")
 
-    def test_readme_documents_explicit_http_selection_and_no_automatic_fallback(self):
+    def test_readme_documents_http_primary_auto_reads_and_write_boundary(self):
         text = README.read_text()
         self.assertIn("--transport http", text)
+        self.assertIn("--transport mcp", text)
         self.assertIn("JESTER_FORUM_TRANSPORT=http", text)
-        self.assertIn("no automatic transport fallback", text.lower())
-        self.assertIn("duplicating a consequential write", text)
+        self.assertIn("HTTP-primary", text)
+        self.assertIn("MCP fallback", text)
+        lowered = text.lower()
+        self.assertIn("consequential writes", lowered)
+        self.assertIn("never automatically replayed", lowered)
 
-    def test_cli_exposes_http_as_peer_transport_without_changing_default(self):
-        self.assertEqual(self.forum.parse_args(["watch"]).transport, "mcp")
+    def test_cli_defaults_to_auto_and_preserves_explicit_peer_transports(self):
+        self.assertEqual(self.forum.parse_args(["watch"]).transport, "auto")
         self.assertEqual(
             self.forum.parse_args(["--transport", "http", "watch"]).transport,
             "http",
         )
+        self.assertEqual(
+            self.forum.parse_args(["--transport", "mcp", "watch"]).transport,
+            "mcp",
+        )
         self.assertIs(self.forum.transport_invoker("mcp"), self.forum.invoke)
         self.assertEqual(self.forum.transport_invoker("http").__module__, "http_transport")
+        self.assertIs(self.forum.transport_invoker("auto"), self.forum.auto_invoke)
+
+    def test_auto_read_prefers_http_and_skips_mcp_on_success(self):
+        calls = []
+
+        def http(surface, tool, payload):
+            calls.append(("http", surface, tool, payload))
+            return {"status": "OK", "data": {"post": {"id": 6120}}}
+
+        def mcp(*args):
+            calls.append(("mcp", *args))
+            raise AssertionError("MCP fallback must not run after HTTP success")
+
+        result = self.forum.auto_invoke(
+            "read", "read_post", {"post_id": 6120},
+            http_invoker=http, mcp_invoker=mcp,
+        )
+        self.assertEqual(result["status"], "OK")
+        self.assertEqual([row[0] for row in calls], ["http"] )
+        self.assertEqual(result["transport_policy"], "http-primary-read")
+        self.assertEqual(result["attempts"], [
+            {"transport": "http", "status": "OK", "route": "http:read.read_post"}
+        ])
+
+    def test_auto_safe_read_falls_back_once_and_preserves_primary_failure(self):
+        for primary_status in ("RATE_LIMITED", "BLOCKED", "AUTH_REQUIRED"):
+            with self.subTest(primary_status=primary_status):
+                calls = []
+
+                def http(surface, tool, payload, status=primary_status):
+                    calls.append("http")
+                    return {
+                        "status": status,
+                        "route": "http:GET /api/post/6120",
+                        "error": f"primary {status}",
+                    }
+
+                def mcp(surface, tool, payload):
+                    calls.append("mcp")
+                    return {"status": "OK", "data": {"post": {"id": 6120}}}
+
+                result = self.forum.auto_invoke(
+                    "read", "read_post", {"post_id": 6120},
+                    http_invoker=http, mcp_invoker=mcp,
+                )
+                self.assertEqual(calls, ["http", "mcp"] )
+                self.assertEqual(result["status"], "OK")
+                self.assertEqual(result["transport_policy"], "http-primary-read")
+                self.assertEqual(result["attempts"][0]["status"], primary_status)
+                self.assertEqual(result["attempts"][0]["route"], "http:GET /api/post/6120")
+                self.assertEqual(result["attempts"][1], {
+                    "transport": "mcp",
+                    "status": "OK",
+                    "route": "forum-read.read_post",
+                })
+
+    def test_auto_both_read_failures_retain_both_attempts(self):
+        result = self.forum.auto_invoke(
+            "read",
+            "read_post",
+            {"post_id": 6120},
+            http_invoker=lambda *args: {
+                "status": "RATE_LIMITED",
+                "route": "http:GET /api/post/6120",
+                "error": "HTTP 429",
+            },
+            mcp_invoker=lambda *args: {
+                "status": "BLOCKED",
+                "route": "forum-read.read_post",
+                "error": "MCP unavailable",
+            },
+        )
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual([row["status"] for row in result["attempts"]], ["RATE_LIMITED", "BLOCKED"] )
+        self.assertEqual(result["attempts"][0]["error"], "HTTP 429")
+        self.assertEqual(result["attempts"][1]["error"], "MCP unavailable")
+
+    def test_auto_citizen_reads_may_fallback_but_writes_never_cross_transport(self):
+        for tool in ("pulse", "me"):
+            with self.subTest(tool=tool):
+                calls = []
+                result = self.forum.auto_invoke(
+                    "citizen", tool, {},
+                    http_invoker=lambda *args: calls.append("http") or {"status": "RATE_LIMITED", "error": "429"},
+                    mcp_invoker=lambda *args: calls.append("mcp") or {"status": "OK", "data": {}},
+                )
+                self.assertEqual(result["status"], "OK")
+                self.assertEqual(calls, ["http", "mcp"] )
+
+        for tool in ("me_ack", "post", "comment", "vote"):
+            with self.subTest(tool=tool):
+                calls = []
+                result = self.forum.auto_invoke(
+                    "citizen", tool, {},
+                    http_invoker=lambda *args: (_ for _ in ()).throw(AssertionError("HTTP write replay forbidden")),
+                    mcp_invoker=lambda *args: calls.append("mcp") or {"status": "OK", "data": {}},
+                )
+                self.assertEqual(result["status"], "OK")
+                self.assertEqual(calls, ["mcp"] )
 
     def test_http_call_spec_maps_every_domain_operation(self):
         cases = [

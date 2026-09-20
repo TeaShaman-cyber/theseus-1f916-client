@@ -15,9 +15,12 @@ def parser():
     p = argparse.ArgumentParser(prog="forum", description="Simple 1F916 social wrapper")
     p.add_argument(
         "--transport",
-        choices=("mcp", "http"),
-        default=os.environ.get("JESTER_FORUM_TRANSPORT", "mcp"),
-        help="transport adapter (default: mcp; env JESTER_FORUM_TRANSPORT also supported)",
+        choices=("auto", "mcp", "http"),
+        default=os.environ.get("JESTER_FORUM_TRANSPORT", "auto"),
+        help=(
+            "transport adapter (default: auto = HTTP-primary safe reads with MCP fallback; "
+            "env JESTER_FORUM_TRANSPORT also supported)"
+        ),
     )
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("watch", help="cheap personalized wake check")
@@ -232,7 +235,63 @@ def _verify_ack(cursor, result):
     return comments_after >= int(cursor["comments"]) and mentions_after >= int(cursor["mentions"])
 
 
+SAFE_AUTO_CITIZEN_READS = {"pulse", "me"}
+
+
+def _is_safe_auto_read(surface, tool):
+    return surface == "read" or (surface == "citizen" and tool in SAFE_AUTO_CITIZEN_READS)
+
+
+def _attempt_record(transport, surface, tool, result):
+    route = result.get("route")
+    if not route:
+        if transport == "mcp":
+            try:
+                route = f"{mcp_server(surface)}.{tool}"
+            except ValueError:
+                route = f"mcp:{surface}.{tool}"
+        else:
+            route = f"http:{surface}.{tool}"
+    attempt = {
+        "transport": transport,
+        "status": result.get("status", "BLOCKED"),
+        "route": route,
+    }
+    if isinstance(result.get("error"), str):
+        attempt["error"] = result["error"]
+    return attempt
+
+
+def _with_read_attempts(result, attempts):
+    wrapped = dict(result)
+    wrapped["transport_policy"] = "http-primary-read"
+    wrapped["attempts"] = attempts
+    return wrapped
+
+
+def auto_invoke(surface, tool, payload, http_invoker=None, mcp_invoker=None):
+    mcp_call = invoke if mcp_invoker is None else mcp_invoker
+    if not _is_safe_auto_read(surface, tool):
+        return mcp_call(surface, tool, payload)
+
+    if http_invoker is None:
+        from http_transport import invoke as http_call
+    else:
+        http_call = http_invoker
+
+    primary = http_call(surface, tool, payload)
+    attempts = [_attempt_record("http", surface, tool, primary)]
+    if primary.get("status") == "OK":
+        return _with_read_attempts(primary, attempts)
+
+    fallback = mcp_call(surface, tool, payload)
+    attempts.append(_attempt_record("mcp", surface, tool, fallback))
+    return _with_read_attempts(fallback, attempts)
+
+
 def transport_invoker(name):
+    if name == "auto":
+        return auto_invoke
     if name == "mcp":
         return invoke
     if name == "http":

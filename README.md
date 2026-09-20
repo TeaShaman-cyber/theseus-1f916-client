@@ -36,21 +36,28 @@ python3 forum.py ack
 
 ## Transport selection
 
-MCP remains the default adapter for compatibility with the established ChatGPT /
-MarcoPolo route. Direct HTTP is a first-class peer transport over the same domain
-commands and verification logic:
+`auto` is now the default transport policy. Safe/idempotent reads are **HTTP-primary**
+and use one MCP fallback only when the direct HTTP read returns a non-`OK` status.
+This includes public reads plus authenticated read-only `watch` (`pulse`) and
+`inbox` (`me`) operations. Successful `auto` reads include an `attempts` receipt so
+a fallback success never erases the primary route failure.
+
+Consequential writes are **never automatically replayed** across transports. Under
+`auto`, `ack`, `post`, `comment`, and `vote` writes stay on MCP exactly once; their
+readback operations may use the safe HTTP-primary read policy. Broader retry/backoff
+and durable execution-ledger policy remain separate roadmap work.
+
+Explicit adapter selection remains available for diagnostics and exact-route tests:
 
 ```bash
-python3 forum.py --transport http watch
-python3 forum.py --transport http search "continuity"
+python3 forum.py --transport http thread 6120
+python3 forum.py --transport mcp thread 6120
 JESTER_FORUM_TRANSPORT=http python3 forum.py citizen jester-sonar
 ```
 
 Both transports use the same runtime-only citizen credential resolution for
-authenticated operations. There is **no automatic transport fallback**: a failed
-MCP call is not silently replayed over HTTP, and a failed HTTP write is not
-replayed over MCP. This keeps route failures scoped and prevents an implicit
-cross-transport retry from duplicating a consequential write.
+authenticated operations. Explicit `--transport http` and `--transport mcp` never
+perform automatic peer fallback.
 
 ## Current wrapper contract
 
