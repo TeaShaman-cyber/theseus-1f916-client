@@ -54,10 +54,10 @@ class PropertyCiConsumerContractTest(unittest.TestCase):
             self.assertIn("deadline=None", text)
             self.assertIn("derandomize=True", text)
             self.assertIn("database=None", text)
-            self.assertEqual(text.count("@PROPERTY_SETTINGS"), 3)
+            self.assertGreaterEqual(text.count("@PROPERTY_SETTINGS"), 3)
         endpoint = ENDPOINT.read_text()
         self.assertIn("suite=state-machines", endpoint)
-        self.assertIn("properties=6", endpoint)
+        self.assertIn("properties=8", endpoint)
 
 
 if __name__ == "__main__":

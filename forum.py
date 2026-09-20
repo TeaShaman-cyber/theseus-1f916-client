@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -60,6 +61,8 @@ def parser():
     sub.add_parser("ack", help="ack the processed inbox cursor remembered by the wrapper")
     sub.add_parser("state", help="show local durable inbox state without network access")
     sub.add_parser("operations", help="show local consequential-write ledger without network access")
+    reconcile = sub.add_parser("reconcile", help="reconcile one unresolved write using read-only evidence")
+    reconcile.add_argument("operation_id")
     return p
 
 
@@ -402,7 +405,282 @@ def _recoverable_write(operation, operation_id, error, result=None, ledger_error
     return payload
 
 
+def _reconciliation_fingerprint(value):
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _comparison_evidence(readback_id, expected, observed):
+    keys = sorted(set(expected) | set(observed))
+    mismatched = [key for key in keys if expected.get(key) != observed.get(key)]
+    return {
+        "readback_id": readback_id,
+        "mismatched_fields": mismatched,
+        "expected_sha256": _reconciliation_fingerprint(expected),
+        "observed_sha256": _reconciliation_fingerprint(observed),
+    }
+
+
+def _reconciliation_unknown(
+    operations_path,
+    record,
+    reason,
+    status="OK",
+    evidence=None,
+    error=None,
+):
+    try:
+        forum_ledger.record_reconciliation(
+            operations_path,
+            record["id"],
+            "unknown",
+            evidence=evidence,
+            error=error or reason,
+        )
+    except (forum_ledger.LedgerError, OSError) as exc:
+        return {
+            "status": "BLOCKED",
+            "operation_id": record["id"],
+            "operation": record["operation"],
+            "delivery_state": "unknown",
+            "reason": reason,
+            "ledger_error": str(exc),
+        }
+    return {
+        "status": status,
+        "operation_id": record["id"],
+        "operation": record["operation"],
+        "delivery_state": "unknown",
+        "reason": reason,
+    }
+
+
+def _reconciliation_contradiction(operations_path, record, evidence, reason):
+    try:
+        forum_ledger.record_reconciliation(
+            operations_path,
+            record["id"],
+            "contradiction",
+            evidence=evidence,
+            error=reason,
+        )
+    except (forum_ledger.LedgerError, OSError) as exc:
+        return {
+            "status": "BLOCKED",
+            "operation_id": record["id"],
+            "operation": record["operation"],
+            "delivery_state": "contradiction",
+            "reason": reason,
+            "ledger_error": str(exc),
+        }
+    return {
+        "status": "OK",
+        "operation_id": record["id"],
+        "operation": record["operation"],
+        "delivery_state": "contradiction",
+        "reason": reason,
+    }
+
+
+def _reconciliation_match(operations_path, record, evidence):
+    try:
+        forum_ledger.mark_reconciled_verified(
+            operations_path,
+            record["id"],
+            evidence=evidence,
+        )
+    except (forum_ledger.LedgerError, OSError) as exc:
+        return {
+            "status": "BLOCKED",
+            "operation_id": record["id"],
+            "operation": record["operation"],
+            "delivery_state": "recovered_match",
+            "reason": "remote match is proven but reconciliation receipt could not persist",
+            "ledger_error": str(exc),
+        }
+    result = {
+        "status": "OK",
+        "operation_id": record["id"],
+        "operation": record["operation"],
+        "delivery_state": "recovered_match",
+    }
+    if isinstance(evidence.get("readback_id"), int):
+        result["readback_id"] = evidence["readback_id"]
+    return result
+
+
+def _reconcile_operation(operation_id, invoker, state_path, operations_path):
+    if operations_path is None:
+        return {"status": "BLOCKED", "error": "operation ledger path is not configured"}
+    try:
+        record = forum_ledger.get_operation(operations_path, operation_id)
+    except forum_ledger.LedgerError as exc:
+        return {"status": "BLOCKED", "error": str(exc)}
+
+    if record["state"] in {"VERIFIED", "BLOCKED"}:
+        return {
+            "status": "OK",
+            "operation_id": record["id"],
+            "operation": record["operation"],
+            "delivery_state": "already_terminal",
+            "operation_state": record["state"],
+        }
+
+    operation = record["operation"]
+    intent = record["intent"]
+    evidence = record["evidence"]
+
+    if operation == "vote":
+        return _reconciliation_unknown(
+            operations_path,
+            record,
+            "vote identity cannot be proven from public aggregate count",
+            evidence={"reconciliation_scope": "no_identity_safe_vote_readback"},
+        )
+
+    if operation in {"post", "comment"}:
+        write_id = evidence.get("write_id")
+        if not isinstance(write_id, int):
+            return _reconciliation_unknown(
+                operations_path,
+                record,
+                "no exact write id is available; partial history is not evidence of absence",
+                evidence={"reconciliation_scope": "no_exact_write_id"},
+            )
+        tool = "read_post" if operation == "post" else "read_comment"
+        readback = invoker("read", tool, {f"{operation}_id": write_id})
+        if readback.get("status") != "OK":
+            reason = f"exact {operation} readback is unavailable"
+            result = _reconciliation_unknown(
+                operations_path,
+                record,
+                reason,
+                status=readback.get("status", "BLOCKED"),
+                evidence={
+                    "readback_id": write_id,
+                    "readback_status": readback.get("status"),
+                },
+                error=readback.get("error") or reason,
+            )
+            if isinstance(readback.get("route"), str):
+                result["route"] = readback["route"]
+            return result
+
+        remote = _record_from_readback(readback, operation)
+        if not isinstance(remote, dict) or remote.get("id") != write_id:
+            return _reconciliation_unknown(
+                operations_path,
+                record,
+                f"exact {operation} endpoint did not return the expected object",
+                evidence={"readback_id": write_id, "readback_status": "OK"},
+            )
+
+        if operation == "post":
+            expected = {
+                "id": write_id,
+                "title": intent.get("title"),
+                "body": intent.get("body"),
+            }
+            observed = {
+                "id": remote.get("id"),
+                "title": remote.get("title"),
+                "body": remote.get("body"),
+            }
+            if "url" in intent:
+                expected["url"] = intent.get("url")
+                observed["url"] = remote.get("url")
+        else:
+            expected = {
+                "id": write_id,
+                "post_id": intent.get("post_id"),
+                "parent_id": intent.get("parent_id"),
+                "body": intent.get("body"),
+            }
+            observed = {
+                "id": remote.get("id"),
+                "post_id": remote.get("post_id"),
+                "parent_id": remote.get("parent_id"),
+                "body": remote.get("body"),
+            }
+
+        comparison = _comparison_evidence(write_id, expected, observed)
+        if observed != expected:
+            return _reconciliation_contradiction(
+                operations_path,
+                record,
+                comparison,
+                f"exact {operation} object contradicts durable intent",
+            )
+        return _reconciliation_match(operations_path, record, comparison)
+
+    if operation == "ack":
+        cursor = intent.get("up_to")
+        if not isinstance(cursor, dict):
+            return _reconciliation_unknown(
+                operations_path,
+                record,
+                "ack durable intent has no exact cursor",
+                evidence={"reconciliation_scope": "missing_ack_cursor"},
+            )
+        readback = invoker("citizen", "me", {"cursor_mode": "id"})
+        if readback.get("status") != "OK" or not _verify_ack(cursor, readback):
+            return _reconciliation_unknown(
+                operations_path,
+                record,
+                "current inbox state does not prove acknowledgement progress",
+                status=readback.get("status", "OK"),
+                evidence={"readback_status": readback.get("status")},
+                error=readback.get("error"),
+            )
+        try:
+            if pathlib.Path(state_path).exists():
+                forum_state.commit_verified_ack(state_path, cursor)
+        except (forum_state.StateError, OSError) as exc:
+            try:
+                forum_ledger.record_reconciliation(
+                    operations_path,
+                    record["id"],
+                    "recovered_match",
+                    evidence={"remote_verified": True},
+                    error=f"remote ack is proven but local inbox state could not advance: {exc}",
+                )
+            except (forum_ledger.LedgerError, OSError):
+                pass
+            return {
+                "status": "BLOCKED",
+                "operation_id": record["id"],
+                "operation": "ack",
+                "delivery_state": "recovered_match",
+                "reason": f"remote ack is proven but local inbox state could not advance: {exc}",
+            }
+        return _reconciliation_match(
+            operations_path,
+            record,
+            {"remote_verified": True},
+        )
+
+    return _reconciliation_unknown(
+        operations_path,
+        record,
+        f"operation type has no reconciliation contract: {operation}",
+        evidence={"reconciliation_scope": "unsupported_operation"},
+    )
+
+
 def execute(args, invoker=invoke, state_path=STATE, operations_path=None):
+    if args.command == "reconcile":
+        return _reconcile_operation(
+            args.operation_id,
+            invoker=invoker,
+            state_path=state_path,
+            operations_path=operations_path,
+        )
+
     if args.command == "operations":
         if operations_path is None:
             return {"status": "BLOCKED", "error": "operation ledger path is not configured"}
