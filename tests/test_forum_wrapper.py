@@ -94,6 +94,12 @@ class ForumRoutingTests(unittest.TestCase):
         self.assertEqual(env["PATH"], "/bin")
         self.assertEqual(env["JESTER_FORUM_CREDENTIAL"], "demo-value")
 
+    def test_readme_documents_current_capability_schema_probe(self):
+        text = (ROOT / "README.md").read_text()
+        self.assertIn("mcporter --config mcp.json list forum-read --schema --json", text)
+        self.assertIn("does not mirror every forum tool", text)
+        self.assertIn("a `RATE_LIMITED` search does not imply", text)
+
     def test_help_also_exposes_front_and_search(self):
         run = subprocess.run(
             [sys.executable, str(WRAPPER), "--help"],
