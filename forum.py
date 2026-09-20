@@ -5,6 +5,8 @@ import os
 import pathlib
 import subprocess
 
+import forum_state
+
 ROOT = pathlib.Path(__file__).resolve().parent
 CONFIG = ROOT / "mcp.json"
 STATE = ROOT / ".forum-state.json"
@@ -53,6 +55,7 @@ def parser():
     vote.add_argument("target_id", type=int)
 
     sub.add_parser("ack", help="ack the processed inbox cursor remembered by the wrapper")
+    sub.add_parser("state", help="show local durable inbox state without network access")
     return p
 
 
@@ -168,43 +171,16 @@ def citizen_env(base=None, load_value=None):
     return env
 
 
-def _ack_cursor_leq(left, right):
-    return all(
-        int(left[field]) <= int(right[field])
-        for field in ("timestamp", "comments", "mentions")
-    )
-
-
 def merge_ack_cursor(current, offered):
-    if current is None:
-        return dict(offered)
-    if current.get("version") != offered.get("version"):
-        raise ValueError("ack cursor version changed")
-    if _ack_cursor_leq(current, offered):
-        return dict(current)
-    if _ack_cursor_leq(offered, current):
-        return dict(offered)
-    raise ValueError("ack cursors are not safely ordered; refusing to synthesize cursor")
+    return forum_state.merge_ack_cursor(current, offered)
 
 
 def _load_state(state_path):
-    path = pathlib.Path(state_path)
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text())
-
-
-def _save_pending_ack(offered, state_path):
-    path = pathlib.Path(state_path)
-    state = _load_state(path)
-    state["pending_ack"] = merge_ack_cursor(state.get("pending_ack"), offered)
-    path.write_text(json.dumps(state, indent=2) + "\n")
+    return forum_state.load_state(state_path)
 
 
 def _clear_state(state_path):
-    path = pathlib.Path(state_path)
-    if path.exists():
-        path.unlink()
+    forum_state.clear_state(state_path)
 
 
 def _record_from_readback(result, kind):
@@ -307,17 +283,30 @@ def transport_invoker(name):
 
 
 def execute(args, invoker=invoke, state_path=STATE):
+    if args.command == "state":
+        try:
+            return {"status": "OK", "data": forum_state.state_summary(state_path)}
+        except forum_state.StateError as exc:
+            return {"status": "BLOCKED", "error": f"could not read durable state: {exc}"}
+
     if args.command == "ack":
-        cursor = _load_state(state_path).get("pending_ack")
-        if not cursor:
-            return {"status": "BLOCKED", "error": "no processed inbox cursor is pending"}
+        try:
+            cursor = forum_state.ackable_cursor(state_path)
+        except forum_state.StateError as exc:
+            return {"status": "BLOCKED", "error": str(exc)}
         written = invoker("citizen", "me_ack", {"up_to": cursor})
         if written.get("status") != "OK":
             return written
         readback = invoker("citizen", "me", {"cursor_mode": "id"})
         if not _verify_ack(cursor, readback):
             return {"status": "BLOCKED", "error": "inbox acknowledgement readback did not prove progress"}
-        _clear_state(state_path)
+        try:
+            forum_state.commit_verified_ack(state_path, cursor)
+        except (forum_state.StateError, OSError) as exc:
+            return {
+                "status": "BLOCKED",
+                "error": f"ack was verified remotely but local durable state could not advance: {exc}",
+            }
         return {"status": "WRITE_VERIFIED", "operation": "ack", "data": written.get("data")}
 
     if args.command == "vote":
@@ -339,12 +328,13 @@ def execute(args, invoker=invoke, state_path=STATE):
         return result
 
     if args.command == "inbox":
-        offered = (result.get("data") or {}).get("ack_cursor")
+        data = result.get("data") or {}
+        offered = data.get("ack_cursor") if isinstance(data, dict) else None
         if isinstance(offered, dict):
             try:
-                _save_pending_ack(offered, state_path)
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                return {"status": "BLOCKED", "error": f"could not persist inbox cursor: {exc}"}
+                forum_state.bank_inbox_page(state_path, data)
+            except (forum_state.StateError, OSError) as exc:
+                return {"status": "BLOCKED", "error": f"could not bank inbox work: {exc}"}
         return result
 
     if args.command == "post":

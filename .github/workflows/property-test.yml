@@ -1,0 +1,16 @@
+name: Property test
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  property-test:
+    uses: TeaShaman-cyber/marcopolo-cookbook/.github/workflows/reusable-property-test.yml@0fa76f7aa1ccad2fb175591c9497157d8c60e481
+    with:
+      python_version: "3.11"
+      requirements_file: requirements/ci-property.txt
+      property_endpoint: tools/ci/property-test

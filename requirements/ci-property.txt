@@ -1,0 +1,5 @@
+# Python 3.11 / Linux x86_64 property-test lock.
+hypothesis==6.168.0 \
+    --hash=sha256:53469a1a7c4861b12c9a8622f762d7d1fd7bcf171884e1018ed5a8f063a5c063
+sortedcontainers==2.4.0 \
+    --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
