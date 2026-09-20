@@ -1,0 +1,103 @@
+name: Semantic semdup advisory
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: semantic-semdup-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trace:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare bounded trace input
+        shell: bash
+        run: |
+          set -euo pipefail
+          profile=tools/semantic_qa/profile.json
+          out="$RUNNER_TEMP/semantic-input"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+            task="pr-${{ github.event.pull_request.number }}"
+          else
+            base="$(git rev-parse HEAD^)"
+            head="$(git rev-parse HEAD)"
+            task="manual-${{ github.run_id }}"
+          fi
+          python3 tools/semantic_qa/trace_input.py             --base "$base"             --head "$head"             --output "$out"             --repository "${{ github.repository }}"             --task-id "$task"             --max-files "$(jq -r '.input_budget.max_files' "$profile")"             --max-total-bytes "$(jq -r '.input_budget.max_total_bytes' "$profile")"             --max-file-bytes "$(jq -r '.input_budget.max_file_bytes' "$profile")"
+          {
+            echo "SEMANTIC_BASE=$base"
+            echo "SEMANTIC_HEAD=$head"
+            echo "SEMANTIC_TASK=$task"
+          } >> "$GITHUB_ENV"
+
+      - name: Run packaged semdup advisory
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          out="$RUNNER_TEMP/semantic-semdup"
+          input="$RUNNER_TEMP/semantic-input"
+          mkdir -p "$out"
+          python3 tools/semantic_qa/run_semdup_advisory.py             --repo .             --base-sha "$SEMANTIC_BASE"             --candidate-sha "$SEMANTIC_HEAD"             --repository "${{ github.repository }}"             --task-id "$SEMANTIC_TASK"             --profile tools/semantic_qa/profile.json             --input-manifest "$input/input-manifest.json"             --output-dir "$out"             --download-dir "$RUNNER_TEMP/semdup-package-download"             --runtime-dir "$RUNNER_TEMP/semdup-runtime"
+          rc=$?
+          if [ "$rc" -ne 0 ] || [ ! -f "$out/receipt.json" ]; then
+            cat > "$out/receipt.json" <<EOF
+          {
+            "schema_version": 1,
+            "tool": "semdup",
+            "status": "UNAVAILABLE",
+            "repository": "${{ github.repository }}",
+            "task_id": "$SEMANTIC_TASK",
+            "base_sha": "$SEMANTIC_BASE",
+            "candidate_sha": "$SEMANTIC_HEAD",
+            "reason": "orchestration_failed",
+            "acceptance_authority": false
+          }
+          EOF
+          fi
+          status=$(jq -r '.status' "$out/receipt.json")
+          freshness=$(jq -r '.toolchain.freshness.status // "CURRENTNESS_UNKNOWN"' "$out/receipt.json")
+          setup_ms=$(jq -r '.toolchain.setup_ms // 0' "$out/receipt.json")
+          reasons=$(jq -c '.toolchain.freshness.reasons // []' "$out/receipt.json")
+          if [ "$freshness" = "STALE_AVAILABLE" ] || [ "$freshness" = "CURRENTNESS_UNKNOWN" ]; then
+            echo "::warning title=semdup package freshness::$freshness $reasons"
+          fi
+          {
+            echo '### semdup advisory'
+            echo
+            echo "- status: `$status`"
+            echo "- package freshness: `$freshness`"
+            echo "- package setup ms: `$setup_ms`"
+            echo "- candidate: `$SEMANTIC_HEAD`"
+            echo "- task: `$SEMANTIC_TASK`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Upload semantic trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: semantic-semdup-${{ env.SEMANTIC_TASK }}-${{ env.SEMANTIC_HEAD }}
+          path: |
+            ${{ runner.temp }}/semantic-input
+            ${{ runner.temp }}/semantic-semdup
+          if-no-files-found: warn
+          retention-days: 90
