@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import subprocess
+import time
 
 import forum_state
 import forum_ledger
@@ -221,6 +222,8 @@ def _verify_ack(cursor, result):
 
 
 SAFE_AUTO_CITIZEN_READS = {"pulse", "me"}
+SAFE_READ_RETRY_DEFAULT_SECONDS = 1.0
+SAFE_READ_RETRY_MAX_SECONDS = 2.0
 
 
 def _is_safe_auto_read(surface, tool):
@@ -244,6 +247,8 @@ def _attempt_record(transport, surface, tool, result):
     }
     if isinstance(result.get("error"), str):
         attempt["error"] = result["error"]
+    if isinstance(result.get("retry_after_seconds"), (int, float)):
+        attempt["retry_after_seconds"] = float(result["retry_after_seconds"])
     return attempt
 
 
@@ -254,7 +259,29 @@ def _with_read_attempts(result, attempts):
     return wrapped
 
 
-def auto_invoke(surface, tool, payload, http_invoker=None, mcp_invoker=None):
+def _safe_read_retry_delay(result):
+    raw = result.get("retry_after_seconds")
+    if raw is None:
+        return SAFE_READ_RETRY_DEFAULT_SECONDS, None
+    try:
+        delay = float(raw)
+    except (TypeError, ValueError):
+        return SAFE_READ_RETRY_DEFAULT_SECONDS, None
+    if delay < 0:
+        return SAFE_READ_RETRY_DEFAULT_SECONDS, None
+    if delay > SAFE_READ_RETRY_MAX_SECONDS:
+        return None, "retry_after_exceeds_bound"
+    return delay, None
+
+
+def auto_invoke(
+    surface,
+    tool,
+    payload,
+    http_invoker=None,
+    mcp_invoker=None,
+    sleep_fn=time.sleep,
+):
     mcp_call = invoke if mcp_invoker is None else mcp_invoker
     if not _is_safe_auto_read(surface, tool):
         return mcp_call(surface, tool, payload)
@@ -266,12 +293,30 @@ def auto_invoke(surface, tool, payload, http_invoker=None, mcp_invoker=None):
 
     primary = http_call(surface, tool, payload)
     attempts = [_attempt_record("http", surface, tool, primary)]
+    retry_skipped = None
     if primary.get("status") == "OK":
-        return _with_read_attempts(primary, attempts)
+        wrapped = _with_read_attempts(primary, attempts)
+        wrapped["retry_policy"] = "http-rate-limited-once"
+        return wrapped
+
+    if primary.get("status") == "RATE_LIMITED":
+        delay, retry_skipped = _safe_read_retry_delay(primary)
+        if delay is not None:
+            sleep_fn(delay)
+            retry = http_call(surface, tool, payload)
+            attempts.append(_attempt_record("http", surface, tool, retry))
+            if retry.get("status") == "OK":
+                wrapped = _with_read_attempts(retry, attempts)
+                wrapped["retry_policy"] = "http-rate-limited-once"
+                return wrapped
 
     fallback = mcp_call(surface, tool, payload)
     attempts.append(_attempt_record("mcp", surface, tool, fallback))
-    return _with_read_attempts(fallback, attempts)
+    wrapped = _with_read_attempts(fallback, attempts)
+    wrapped["retry_policy"] = "http-rate-limited-once"
+    if retry_skipped is not None:
+        wrapped["retry_skipped"] = retry_skipped
+    return wrapped
 
 
 def transport_invoker(name):
