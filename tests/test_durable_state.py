@@ -242,6 +242,42 @@ class DurableStateContractTests(unittest.TestCase):
             self.assertNotIn('"secret"', text)
             self.assertNotIn('"handle"', text)
 
+    def test_existing_empty_v1_state_summary_reports_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "created_at_ms": 1_000,
+                        "updated_at_ms": 1_000,
+                        "pending_ack": None,
+                        "banked_reads": [],
+                        "recovery": None,
+                    }
+                )
+            )
+            summary = forum_state.state_summary(path, now_ms=2_000)
+            self.assertEqual(summary["state"], "EMPTY")
+            self.assertEqual(summary["banked_reads"], 0)
+
+    def test_verified_ack_recomputes_minimum_across_multiple_remaining_pages(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            first = cursor(100, 10, 20, "seal-first")
+            second = cursor(120, 11, 21, "seal-second")
+            third = cursor(140, 12, 22, "seal-third")
+            forum_state.bank_inbox_page(path, inbox_data(first, 1), now_ms=1_000)
+            forum_state.bank_inbox_page(path, inbox_data(second, 2), now_ms=2_000)
+            forum_state.bank_inbox_page(path, inbox_data(third, 3), now_ms=3_000)
+
+            state = forum_state.commit_verified_ack(path, first, now_ms=4_000)
+            self.assertEqual(state["pending_ack"], second)
+            self.assertEqual(
+                [row["ack_cursor"] for row in state["banked_reads"]],
+                [second, third],
+            )
+
     def test_verified_floor_ack_prunes_only_covered_banked_reads(self):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "state.json"

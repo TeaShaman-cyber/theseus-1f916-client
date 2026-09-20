@@ -1,0 +1,23 @@
+name: Mutation test
+
+on:
+  pull_request:
+    paths:
+      - forum_state.py
+      - tests/test_durable_state.py
+      - setup.cfg
+      - requirements/ci-mutation.txt
+      - tools/ci/mutation-test
+      - .github/workflows/mutation-test.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation-test:
+    uses: TeaShaman-cyber/marcopolo-cookbook/.github/workflows/reusable-mutation-test.yml@0fa76f7aa1ccad2fb175591c9497157d8c60e481
+    with:
+      python_version: "3.11"
+      requirements_file: requirements/ci-mutation.txt
+      mutation_endpoint: tools/ci/mutation-test
