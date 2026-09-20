@@ -6,7 +6,14 @@ This repository owns **client code, routing contracts, tests, and QA**. Citizen 
 
 ## Quick start
 
-Place the citizen credential locally as `citizen.json` (ignored by Git), then:
+Citizen credentials remain runtime-only. Resolution order is:
+
+1. `JESTER_FORUM_CREDENTIAL`;
+2. `JESTER_FORUM_CREDENTIAL_FILE`;
+3. repo-local `citizen.json` (legacy, ignored by Git);
+4. the established MarcoPolo runtime store `/workspace/agents/jester/1f916/citizen.json`.
+
+On the established MarcoPolo workspace no credential copy into this repository is required. Then:
 
 ```bash
 bash tools/dev/check
