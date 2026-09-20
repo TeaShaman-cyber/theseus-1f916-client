@@ -134,7 +134,7 @@ class ForumInvocationTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, stdout='{"answer": 42}\n', stderr="")
 
         result = self.forum.invoke(
-            "forum-read", "pulse", {}, runner=runner, base_env={"PATH": "/bin"}
+            "read", "pulse", {}, runner=runner, base_env={"PATH": "/bin"}
         )
         self.assertEqual(result, {"status": "OK", "data": {"answer": 42}})
         self.assertEqual(seen["env"], {"PATH": "/bin"})
@@ -148,7 +148,7 @@ class ForumInvocationTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, stdout='{"you": {"ok": true}}', stderr="")
 
         result = self.forum.invoke(
-            "forum-citizen",
+            "citizen",
             "pulse",
             {},
             runner=runner,
@@ -157,6 +157,16 @@ class ForumInvocationTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "OK")
         self.assertEqual(seen["env"]["JESTER_FORUM_CREDENTIAL"], "demo-value")
+
+    def test_invoke_rejects_physical_mcp_server_names_as_domain_surfaces(self):
+        def runner(*args, **kwargs):
+            raise AssertionError("runner must not be called for a physical MCP server name")
+        for surface in ("forum-read", "forum-citizen"):
+            with self.subTest(surface=surface):
+                result = self.forum.invoke(surface, "pulse", {}, runner=runner, base_env={})
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertEqual(result["route"], f"{surface}.pulse")
+                self.assertIn("unknown transport surface", result["error"])
 
     def test_invoke_rejects_unknown_transport_surface_before_runner(self):
         def runner(*args, **kwargs):
@@ -178,7 +188,7 @@ class ForumInvocationTests(unittest.TestCase):
                 def runner(argv, **kwargs):
                     return subprocess.CompletedProcess(argv, 1, stdout="", stderr=message)
                 result = self.forum.invoke(
-                    "forum-read", "pulse", {}, runner=runner, base_env={}
+                    "read", "pulse", {}, runner=runner, base_env={}
                 )
                 self.assertEqual(result["status"], expected)
 
@@ -217,10 +227,10 @@ class ForumExecutionTests(unittest.TestCase):
             raise AssertionError(route)
 
         limited = self.forum.invoke(
-            "forum-read", "search", {"query": "lad-codex"}, runner=runner, base_env={}
+            "read", "search", {"query": "lad-codex"}, runner=runner, base_env={}
         )
         healthy = self.forum.invoke(
-            "forum-read", "citizen", {"handle": "lad-codex"}, runner=runner, base_env={}
+            "read", "citizen", {"handle": "lad-codex"}, runner=runner, base_env={}
         )
         self.assertEqual(limited["status"], "RATE_LIMITED")
         self.assertEqual(limited["route"], "forum-read.search")
@@ -241,7 +251,7 @@ class ForumPayloadErrorTests(unittest.TestCase):
             )
 
         result = self.forum.invoke(
-            "forum-read", "pulse", {}, runner=runner, base_env={}
+            "read", "pulse", {}, runner=runner, base_env={}
         )
         self.assertEqual(result["status"], "AUTH_REQUIRED")
         self.assertIn("401", result["error"])

@@ -112,11 +112,9 @@ MCP_SERVER_BY_SURFACE = {
 
 
 def mcp_server(surface):
-    if surface in MCP_SERVER_BY_SURFACE:
-        return MCP_SERVER_BY_SURFACE[surface]
-    if surface in MCP_SERVER_BY_SURFACE.values():
-        return surface
-    raise ValueError(f"unknown transport surface: {surface}")
+    if surface not in MCP_SERVER_BY_SURFACE:
+        raise ValueError(f"unknown transport surface: {surface}")
+    return MCP_SERVER_BY_SURFACE[surface]
 
 
 def invoke(surface, tool, payload, runner=subprocess.run, base_env=None, load_value=None):
