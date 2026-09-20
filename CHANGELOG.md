@@ -12,7 +12,8 @@ Highlights since v0.9.0:
 - validator-only conditional HTTP cache that respects `no-store` and never substitutes cache for transport failure;
 - deterministic HTTP/MCP conformance coverage for read semantics, failure classes, write verification, recovery, and secret custody;
 - documented live MCP capability schema probe while keeping the wrapper task-oriented;
-- expanded canonical and generated-property QA.
+- expanded canonical and generated-property QA;
+- repo-owned exact-head release-candidate gate binding clean `main`, local QA/conformance, hosted source receipts, and independent review evidence without granting promotion authority.
 
 Known continuing QA debt:
 
