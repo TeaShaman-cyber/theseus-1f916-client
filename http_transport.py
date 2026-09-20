@@ -95,6 +95,22 @@ def _cache_control_no_store(headers):
     return bool(value and "no-store" in value.lower())
 
 
+
+def _caller_revalidation(route, sent_etag, response_etag=None):
+    if response_etag is not None and response_etag != sent_etag:
+        return {
+            "status": "BLOCKED",
+            "route": route,
+            "revalidation_status": "VALIDATOR_MISMATCH",
+            "error": "HTTP 304 validator does not match the caller validator",
+        }
+    return {
+        "status": "NOT_MODIFIED",
+        "route": route,
+        "revalidation_status": "NOT_MODIFIED",
+        "etag": sent_etag,
+    }
+
 def _cached_revalidation(route, entry, sent_etag, response_etag=None):
     if entry is None or not sent_etag or entry.get("etag") != sent_etag:
         return {
@@ -137,7 +153,7 @@ def _normalize(tool, data):
     }
 
 
-def invoke(surface, tool, payload, requester=None, cache_path=CACHE):
+def invoke(surface, tool, payload, requester=None, cache_path=CACHE, if_none_match=None):
     if requester is None:
         requester = request_with_meta
     try:
@@ -150,10 +166,25 @@ def invoke(surface, tool, payload, requester=None, cache_path=CACHE):
         }
 
     route = f"http:{method} {path.split('?', 1)[0]}"
+    if if_none_match is not None:
+        if not isinstance(if_none_match, str) or not if_none_match:
+            return {
+                "status": "BLOCKED",
+                "route": route,
+                "error": "if_none_match must be a non-empty ETag string",
+            }
+        if not _public_cacheable(surface, method):
+            return {
+                "status": "BLOCKED",
+                "route": route,
+                "error": "explicit conditional validator is supported only for public GET reads",
+            }
+
     cache_enabled = cache_path is not None and _public_cacheable(surface, method)
     cache_key = forum_cache.cache_key(method, path) if cache_enabled else None
     cache_entry = forum_cache.lookup(cache_path, cache_key) if cache_enabled else None
-    sent_etag = cache_entry.get("etag") if isinstance(cache_entry, dict) else None
+    cached_etag = cache_entry.get("etag") if isinstance(cache_entry, dict) else None
+    sent_etag = if_none_match if if_none_match is not None else cached_etag
     conditional_headers = {"If-None-Match": sent_etag} if sent_etag else None
 
     try:
@@ -169,6 +200,12 @@ def invoke(surface, tool, payload, requester=None, cache_path=CACHE):
             )
         data, response_status, response_headers = _response_parts(response)
         if response_status == 304:
+            if if_none_match is not None:
+                return _caller_revalidation(
+                    route,
+                    sent_etag,
+                    response_etag=_header(response_headers, "ETag"),
+                )
             return _cached_revalidation(
                 route,
                 cache_entry,
@@ -183,6 +220,12 @@ def invoke(surface, tool, payload, requester=None, cache_path=CACHE):
             }
     except urllib.error.HTTPError as exc:
         if exc.code == 304:
+            if if_none_match is not None:
+                return _caller_revalidation(
+                    route,
+                    sent_etag,
+                    response_etag=_header(exc.headers, "ETag"),
+                )
             return _cached_revalidation(
                 route,
                 cache_entry,
@@ -217,6 +260,11 @@ def invoke(surface, tool, payload, requester=None, cache_path=CACHE):
 
     normalized = _normalize(tool, data)
     result = {"status": "OK", "data": normalized}
+    response_etag = _header(response_headers, "ETag")
+    if response_etag is not None:
+        result["etag"] = response_etag
+    if if_none_match is not None:
+        result["revalidation_status"] = "FULL_RESPONSE"
     if not cache_enabled or response_headers is None:
         return result
 
@@ -230,7 +278,6 @@ def invoke(surface, tool, payload, requester=None, cache_path=CACHE):
         result["cache_status"] = "NO_STORE"
         return result
 
-    response_etag = _header(response_headers, "ETag")
     if not response_etag:
         try:
             forum_cache.invalidate(cache_path, cache_key)

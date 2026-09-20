@@ -17,6 +17,16 @@ class FakeResponse:
         self.headers = {} if headers is None else headers
 
 
+
+def rate_limited():
+    return urllib.error.HTTPError(
+        "https://1f916.ai/api/comment/71462",
+        429,
+        "Too Many Requests",
+        {},
+        io.BytesIO(b"rate limited"),
+    )
+
 def not_modified(etag=None):
     headers = {} if etag is None else {"ETag": etag}
     return urllib.error.HTTPError(
@@ -296,7 +306,120 @@ class ConditionalCacheContractTests(unittest.TestCase):
         self.assertIn("transport failure never becomes cache success", text)
         self.assertIn("authenticated `pulse`/`me` reads are intentionally excluded", text)
         self.assertIn("never affect `.forum-state.json` or `.forum-operations.json`", text)
+        self.assertIn("caller that already owns the representation", text)
+        self.assertIn("status=NOT_MODIFIED", text)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CallerHeldRevalidationContractTests(unittest.TestCase):
+    def test_no_store_200_preserves_etag_without_persistent_cache(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache = pathlib.Path(td) / "cache.json"
+            result = http_transport.invoke(
+                "read",
+                "read_comment",
+                {"comment_id": 71462},
+                requester=lambda *args, **kwargs: FakeResponse(
+                    {"comment": {"id": 71462, "body": "hello"}},
+                    headers={"ETag": '"c1-v1"', "Cache-Control": "no-store"},
+                ),
+                cache_path=cache,
+            )
+            self.assertEqual(result["status"], "OK")
+            self.assertEqual(result["cache_status"], "NO_STORE")
+            self.assertEqual(result["etag"], '"c1-v1"')
+            self.assertFalse(cache.exists())
+
+    def test_explicit_caller_validator_304_returns_not_modified_without_body_or_cache(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache = pathlib.Path(td) / "cache.json"
+            seen = []
+
+            def requester(path, method="GET", payload=None, auth=False, headers=None):
+                seen.append(headers or {})
+                raise not_modified('"c1-v1"')
+
+            result = http_transport.invoke(
+                "read",
+                "read_comment",
+                {"comment_id": 71462},
+                requester=requester,
+                cache_path=cache,
+                if_none_match='"c1-v1"',
+            )
+            self.assertEqual(result["status"], "NOT_MODIFIED")
+            self.assertEqual(result["etag"], '"c1-v1"')
+            self.assertEqual(result["revalidation_status"], "NOT_MODIFIED")
+            self.assertNotIn("data", result)
+            self.assertEqual(seen, [{"If-None-Match": '"c1-v1"'}])
+            self.assertFalse(cache.exists())
+
+    def test_explicit_caller_validator_200_returns_current_body_and_new_etag(self):
+        seen = []
+
+        def requester(path, method="GET", payload=None, auth=False, headers=None):
+            seen.append(headers or {})
+            return FakeResponse(
+                {"comment": {"id": 71462, "body": "changed"}},
+                headers={"ETag": '"c1-v2"', "Cache-Control": "no-store"},
+            )
+
+        result = http_transport.invoke(
+            "read",
+            "read_comment",
+            {"comment_id": 71462},
+            requester=requester,
+            cache_path=None,
+            if_none_match='"c1-v1"',
+        )
+        self.assertEqual(result["status"], "OK")
+        self.assertEqual(result["data"]["comment"]["body"], "changed")
+        self.assertEqual(result["etag"], '"c1-v2"')
+        self.assertEqual(result["revalidation_status"], "FULL_RESPONSE")
+        self.assertEqual(seen, [{"If-None-Match": '"c1-v1"'}])
+
+    def test_explicit_304_mismatched_response_validator_fails_closed(self):
+        result = http_transport.invoke(
+            "read",
+            "read_comment",
+            {"comment_id": 71462},
+            requester=lambda *args, **kwargs: (_ for _ in ()).throw(not_modified('"other"')),
+            cache_path=None,
+            if_none_match='"c1-v1"',
+        )
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(result["revalidation_status"], "VALIDATOR_MISMATCH")
+        self.assertNotIn("data", result)
+
+    def test_explicit_conditional_transport_failure_is_not_not_modified(self):
+        result = http_transport.invoke(
+            "read",
+            "read_comment",
+            {"comment_id": 71462},
+            requester=lambda *args, **kwargs: (_ for _ in ()).throw(rate_limited()),
+            cache_path=None,
+            if_none_match='"c1-v1"',
+        )
+        self.assertEqual(result["status"], "RATE_LIMITED")
+        self.assertNotEqual(result.get("revalidation_status"), "NOT_MODIFIED")
+
+    def test_explicit_conditional_validator_is_public_get_only(self):
+        calls = []
+        for surface, tool, payload in (
+            ("citizen", "me", {"cursor_mode": "id"}),
+            ("citizen", "comment", {"post_id": 6108, "body": "hello"}),
+        ):
+            result = http_transport.invoke(
+                surface,
+                tool,
+                payload,
+                requester=lambda *args, **kwargs: calls.append(args) or {},
+                cache_path=None,
+                if_none_match='"c1-v1"',
+            )
+            self.assertEqual(result["status"], "BLOCKED")
+            self.assertIn("public GET", result["error"])
+        self.assertEqual(calls, [])

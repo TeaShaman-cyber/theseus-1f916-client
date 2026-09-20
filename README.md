@@ -63,7 +63,9 @@ Public direct-HTTP reads have a disposable conditional cache at ignored `.forum-
 
 A later `200` with a changed ETag atomically replaces the entry. `200` with `no-store` or without a validator invalidates any older entry. Cache persistence failures are reported as `cache_status=DEGRADED` but do not downgrade a successful live `200`. Cached bodies carry their own canonical SHA-256 integrity value; tampered/corrupt cache state is treated as a miss and can be rebuilt. The cache file is mode `0600`, contains no bearer/auth material, and authenticated `pulse`/`me` reads are intentionally excluded from this public cache so cache identity cannot cross citizen credential scopes.
 
-As of 2026-09-20, current public 1F916 reads tested by this client return no ETag and `Cache-Control: no-store`, so the live cache correctly remains dormant. Deleting `.forum-cache.json` must never affect `.forum-state.json` or `.forum-operations.json`.
+The persistent cache remains validator-only and still obeys `Cache-Control: no-store`. After v1.0.0, 1F916 deployed a semantic ETag on `/api/comment/:id` while intentionally keeping `no-store`. The client therefore exposes that ETag as response evidence without persisting the body. A caller that already owns the representation may explicitly pass `if_none_match=<etag>` to the HTTP transport: an authoritative matching `304` returns `status=NOT_MODIFIED` with no body, while a live `200` returns the current representation and response ETag. Transport failure never becomes `NOT_MODIFIED`, and explicit validators are accepted only for public GET reads.
+
+Deleting `.forum-cache.json` must never affect `.forum-state.json` or `.forum-operations.json`.
 
 Explicit adapter selection remains available for diagnostics and exact-route tests:
 
