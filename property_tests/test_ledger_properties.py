@@ -110,6 +110,76 @@ class ExecutionLedgerPropertyTests(unittest.TestCase):
             self.assertEqual(record["evidence"]["transport_status"], "RATE_LIMITED")
             self.assertFalse(record["auto_replay_allowed"])
 
+    @PROPERTY_SETTINGS
+    @given(
+        operation=OPERATION,
+        unresolved=st.sampled_from(("ATTEMPTED", "COMPLETED", "RECOVERABLE")),
+        delivery=st.sampled_from(("unknown", "contradiction")),
+    )
+    def test_reconciliation_evidence_keeps_unresolved_state_and_no_replay(
+        self, operation, unresolved, delivery
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "operations.json"
+            forum_ledger.begin_operation(
+                path,
+                operation=operation,
+                intent={"marker": "intent"},
+                now_ms=1_000,
+                operation_id="op",
+            )
+            if unresolved == "COMPLETED":
+                forum_ledger.transition_operation(path, "op", "COMPLETED", now_ms=2_000)
+            elif unresolved == "RECOVERABLE":
+                forum_ledger.transition_operation(path, "op", "RECOVERABLE", now_ms=2_000)
+            record = forum_ledger.record_reconciliation(
+                path,
+                "op",
+                delivery,
+                evidence={"marker": "read-only"},
+                now_ms=3_000,
+            )
+            self.assertEqual(record["state"], unresolved)
+            self.assertFalse(record["auto_replay_allowed"])
+            self.assertEqual(
+                record["evidence"]["reconciliation_history"][-1]["delivery_state"],
+                delivery,
+            )
+
+    @PROPERTY_SETTINGS
+    @given(
+        operation=OPERATION,
+        unresolved=st.sampled_from(("ATTEMPTED", "COMPLETED", "RECOVERABLE")),
+    )
+    def test_recovered_match_can_verify_any_unresolved_state_without_enabling_replay(
+        self, operation, unresolved
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "operations.json"
+            forum_ledger.begin_operation(
+                path,
+                operation=operation,
+                intent={"marker": "intent"},
+                now_ms=1_000,
+                operation_id="op",
+            )
+            if unresolved == "COMPLETED":
+                forum_ledger.transition_operation(path, "op", "COMPLETED", now_ms=2_000)
+            elif unresolved == "RECOVERABLE":
+                forum_ledger.transition_operation(path, "op", "RECOVERABLE", now_ms=2_000)
+            record = forum_ledger.mark_reconciled_verified(
+                path,
+                "op",
+                evidence={"readback_id": 1},
+                now_ms=3_000,
+            )
+            self.assertEqual(record["state"], "VERIFIED")
+            self.assertFalse(record["auto_replay_allowed"])
+            self.assertEqual(
+                record["evidence"]["reconciliation_history"][-1]["delivery_state"],
+                "recovered_match",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -219,6 +219,84 @@ def transition_operation(path, operation_id, state, evidence=None, error=None, n
     return copy.deepcopy(target)
 
 
+
+def get_operation(path, operation_id):
+    ledger = load_ledger(path)
+    target = next((row for row in ledger["operations"] if row["id"] == operation_id), None)
+    if target is None:
+        raise LedgerError(f"unknown operation id: {operation_id}")
+    return copy.deepcopy(target)
+
+
+def record_reconciliation(
+    path,
+    operation_id,
+    delivery_state,
+    evidence=None,
+    error=None,
+    now_ms=None,
+):
+    if delivery_state not in {"recovered_match", "contradiction", "unknown"}:
+        raise LedgerError(f"unsupported reconciliation state: {delivery_state}")
+    now = _now_ms() if now_ms is None else int(now_ms)
+    ledger = load_ledger(path)
+    target = next((row for row in ledger["operations"] if row["id"] == operation_id), None)
+    if target is None:
+        raise LedgerError(f"unknown operation id: {operation_id}")
+    if target["state"] not in UNRESOLVED_STATES:
+        raise LedgerError(f"operation is already terminal: {target['state']}")
+    history = target["evidence"].setdefault("reconciliation_history", [])
+    if not isinstance(history, list):
+        raise LedgerError("reconciliation_history must be a list")
+    entry = {
+        "at_ms": now,
+        "delivery_state": delivery_state,
+        "evidence": copy.deepcopy(evidence or {}),
+        "error": _bounded_error(error),
+    }
+    history.append(entry)
+    if len(history) > 20:
+        del history[:-20]
+    target["updated_at_ms"] = now
+    target["auto_replay_allowed"] = False
+    ledger["updated_at_ms"] = now
+    _validate_ledger(ledger)
+    _atomic_write(path, ledger)
+    return copy.deepcopy(target)
+
+
+def mark_reconciled_verified(path, operation_id, evidence=None, now_ms=None):
+    now = _now_ms() if now_ms is None else int(now_ms)
+    ledger = load_ledger(path)
+    target = next((row for row in ledger["operations"] if row["id"] == operation_id), None)
+    if target is None:
+        raise LedgerError(f"unknown operation id: {operation_id}")
+    if target["state"] not in UNRESOLVED_STATES:
+        raise LedgerError(f"operation is already terminal: {target['state']}")
+    history = target["evidence"].setdefault("reconciliation_history", [])
+    if not isinstance(history, list):
+        raise LedgerError("reconciliation_history must be a list")
+    entry = {
+        "at_ms": now,
+        "delivery_state": "recovered_match",
+        "evidence": copy.deepcopy(evidence or {}),
+        "error": None,
+    }
+    history.append(entry)
+    if len(history) > 20:
+        del history[:-20]
+    if evidence:
+        target["evidence"].update(copy.deepcopy(evidence))
+    target["state"] = "VERIFIED"
+    target["updated_at_ms"] = now
+    target["error"] = None
+    target["auto_replay_allowed"] = False
+    ledger["updated_at_ms"] = now
+    _validate_ledger(ledger)
+    _atomic_write(path, ledger)
+    return copy.deepcopy(target)
+
+
 def operations_summary(path, now_ms=None):
     path = pathlib.Path(path)
     if not path.exists():
