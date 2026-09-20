@@ -8,6 +8,18 @@ import urllib.request
 ROOT = pathlib.Path(__file__).resolve().parent
 BASE = "https://1f916.ai"
 RUNTIME_CREDENTIAL = pathlib.Path("/workspace/agents/jester/1f916/citizen.json")
+VERSION_FILE = ROOT / "VERSION"
+
+
+def client_version(path=None):
+    version_path = VERSION_FILE if path is None else pathlib.Path(path)
+    value = version_path.read_text().strip()
+    if not value:
+        raise RuntimeError(f"empty client version: {version_path}")
+    return value
+
+
+CLIENT_VERSION = client_version()
 
 
 
@@ -53,7 +65,7 @@ def credential(env=None, root=None, runtime_path=None):
 
 
 def request_with_meta(path, method="GET", payload=None, auth=False, headers=None):
-    request_headers = {"User-Agent": "jester-1f916-client/0.1"}
+    request_headers = {"User-Agent": f"theseus-1f916-client/{CLIENT_VERSION}"}
     if headers:
         request_headers.update(headers)
     data = None
