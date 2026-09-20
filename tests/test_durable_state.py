@@ -123,6 +123,24 @@ class DurableStateContractTests(unittest.TestCase):
             with self.assertRaises(forum_state.StateError):
                 forum_state.load_state(path)
 
+    def test_canonical_recovery_state_loads_and_reports_recovery_required(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            recovery_cursor = cursor(100, 10, 20, "legacy-seal")
+            raw = {
+                "schema_version": 1,
+                "created_at_ms": 1_000,
+                "updated_at_ms": 1_000,
+                "pending_ack": None,
+                "banked_reads": [],
+                "recovery": {"kind": "legacy_pending_ack", "cursor": recovery_cursor},
+            }
+            path.write_text(json.dumps(raw))
+
+            state = forum_state.load_state(path)
+            self.assertEqual(state["recovery"], raw["recovery"])
+            self.assertEqual(forum_state.state_summary(path, now_ms=2_000)["state"], "RECOVERY_REQUIRED")
+
     def test_bank_inbox_page_persists_exact_work_and_exposes_age(self):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "state.json"
