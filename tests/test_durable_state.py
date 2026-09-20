@@ -53,6 +53,34 @@ class DurableStateContractTests(unittest.TestCase):
             self.assertEqual(state["recovery"], {"kind": "legacy_pending_ack", "cursor": old})
             self.assertEqual(forum_state.state_summary(path, now_ms=10_000)["state"], "RECOVERY_REQUIRED")
 
+    def test_canonical_state_rejects_pending_ack_not_backed_by_exact_bank_floor(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            first = cursor(100, 10, 20, "seal-first")
+            later = cursor(120, 11, 21, "seal-later")
+            forum_state.bank_inbox_page(path, inbox_data(first, 1), now_ms=1_000)
+            raw = json.loads(path.read_text())
+            raw["pending_ack"] = later
+            path.write_text(json.dumps(raw))
+
+            with self.assertRaisesRegex(forum_state.StateError, "exact banked cursor floor"):
+                forum_state.load_state(path)
+
+    def test_canonical_state_rejects_ack_without_banked_work(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            raw = {
+                "schema_version": 1,
+                "created_at_ms": 1_000,
+                "updated_at_ms": 1_000,
+                "pending_ack": cursor(100, 10, 20, "seal"),
+                "banked_reads": [],
+                "recovery": None,
+            }
+            path.write_text(json.dumps(raw))
+            with self.assertRaisesRegex(forum_state.StateError, "without banked work"):
+                forum_state.load_state(path)
+
     def test_corrupt_or_future_state_fails_closed(self):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "state.json"

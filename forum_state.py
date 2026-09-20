@@ -121,6 +121,20 @@ def _validate_state(raw):
         _validate_cursor(banked.get("ack_cursor"), f"banked_reads[{index}].ack_cursor")
         if not isinstance(banked.get("since_last_visit"), dict):
             raise StateError(f"banked_reads[{index}].since_last_visit must be an object")
+
+    if recovery is not None:
+        if raw["pending_ack"] is not None or raw["banked_reads"]:
+            raise StateError("recovery state cannot also contain ackable banked work")
+    elif raw["banked_reads"]:
+        if raw["pending_ack"] is None:
+            raise StateError("banked work requires an exact pending_ack floor")
+        floor = None
+        for banked in raw["banked_reads"]:
+            floor = merge_ack_cursor(floor, banked["ack_cursor"])
+        if raw["pending_ack"] != floor:
+            raise StateError("pending_ack does not match the exact banked cursor floor")
+    elif raw["pending_ack"] is not None:
+        raise StateError("pending_ack without banked work is not ackable")
     return raw
 
 
