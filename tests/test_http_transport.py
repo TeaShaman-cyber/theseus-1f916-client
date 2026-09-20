@@ -71,7 +71,7 @@ class HttpTransportContractTests(unittest.TestCase):
         ])
 
     def test_auto_safe_read_falls_back_once_and_preserves_primary_failure(self):
-        for primary_status in ("RATE_LIMITED", "BLOCKED", "AUTH_REQUIRED"):
+        for primary_status in ("BLOCKED", "AUTH_REQUIRED"):
             with self.subTest(primary_status=primary_status):
                 calls = []
 
@@ -103,6 +103,7 @@ class HttpTransportContractTests(unittest.TestCase):
                 })
 
     def test_auto_both_read_failures_retain_both_attempts(self):
+        sleeps = []
         result = self.forum.auto_invoke(
             "read",
             "read_post",
@@ -117,23 +118,31 @@ class HttpTransportContractTests(unittest.TestCase):
                 "route": "forum-read.read_post",
                 "error": "MCP unavailable",
             },
+            sleep_fn=sleeps.append,
         )
         self.assertEqual(result["status"], "BLOCKED")
-        self.assertEqual([row["status"] for row in result["attempts"]], ["RATE_LIMITED", "BLOCKED"] )
+        self.assertEqual(
+            [row["status"] for row in result["attempts"]],
+            ["RATE_LIMITED", "RATE_LIMITED", "BLOCKED"],
+        )
+        self.assertEqual(sleeps, [1.0])
         self.assertEqual(result["attempts"][0]["error"], "HTTP 429")
-        self.assertEqual(result["attempts"][1]["error"], "MCP unavailable")
+        self.assertEqual(result["attempts"][2]["error"], "MCP unavailable")
 
     def test_auto_citizen_reads_may_fallback_but_writes_never_cross_transport(self):
         for tool in ("pulse", "me"):
             with self.subTest(tool=tool):
                 calls = []
+                sleeps = []
                 result = self.forum.auto_invoke(
                     "citizen", tool, {},
                     http_invoker=lambda *args: calls.append("http") or {"status": "RATE_LIMITED", "error": "429"},
                     mcp_invoker=lambda *args: calls.append("mcp") or {"status": "OK", "data": {}},
+                    sleep_fn=sleeps.append,
                 )
                 self.assertEqual(result["status"], "OK")
-                self.assertEqual(calls, ["http", "mcp"] )
+                self.assertEqual(calls, ["http", "http", "mcp"] )
+                self.assertEqual(sleeps, [1.0])
 
         for tool in ("me_ack", "post", "comment", "vote"):
             with self.subTest(tool=tool):
@@ -145,6 +154,136 @@ class HttpTransportContractTests(unittest.TestCase):
                 )
                 self.assertEqual(result["status"], "OK")
                 self.assertEqual(calls, ["mcp"] )
+
+    def test_http_429_preserves_numeric_retry_after(self):
+        import urllib.error
+
+        error = urllib.error.HTTPError(
+            "https://1f916.ai/api/post/6120",
+            429,
+            "Too Many Requests",
+            {"Retry-After": "2"},
+            None,
+        )
+
+        result = self.http.invoke(
+            "read",
+            "read_post",
+            {"post_id": 6120},
+            requester=lambda *args, **kwargs: (_ for _ in ()).throw(error),
+        )
+        self.assertEqual(result["status"], "RATE_LIMITED")
+        self.assertEqual(result["retry_after_seconds"], 2.0)
+
+    def test_auto_rate_limited_read_retries_http_once_then_stops_on_success(self):
+        calls = []
+        sleeps = []
+
+        def http(surface, tool, payload):
+            calls.append("http")
+            if len(calls) == 1:
+                return {
+                    "status": "RATE_LIMITED",
+                    "route": "http:GET /api/post/6120",
+                    "error": "429",
+                    "retry_after_seconds": 0.25,
+                }
+            return {"status": "OK", "data": {"post": {"id": 6120}}}
+
+        result = self.forum.auto_invoke(
+            "read",
+            "read_post",
+            {"post_id": 6120},
+            http_invoker=http,
+            mcp_invoker=lambda *args: (_ for _ in ()).throw(
+                AssertionError("MCP fallback must not run after HTTP retry succeeds")
+            ),
+            sleep_fn=sleeps.append,
+        )
+        self.assertEqual(result["status"], "OK")
+        self.assertEqual(calls, ["http", "http"])
+        self.assertEqual(sleeps, [0.25])
+        self.assertEqual([row["status"] for row in result["attempts"]], ["RATE_LIMITED", "OK"])
+        self.assertEqual(result["attempts"][0]["retry_after_seconds"], 0.25)
+        self.assertEqual(result["retry_policy"], "http-rate-limited-once")
+
+    def test_auto_rate_limited_read_retries_once_then_falls_back_to_mcp(self):
+        calls = []
+        sleeps = []
+
+        def http(surface, tool, payload):
+            calls.append("http")
+            return {
+                "status": "RATE_LIMITED",
+                "route": "http:GET /api/post/6120",
+                "error": "429",
+            }
+
+        def mcp(surface, tool, payload):
+            calls.append("mcp")
+            return {"status": "OK", "data": {"post": {"id": 6120}}}
+
+        result = self.forum.auto_invoke(
+            "read",
+            "read_post",
+            {"post_id": 6120},
+            http_invoker=http,
+            mcp_invoker=mcp,
+            sleep_fn=sleeps.append,
+        )
+        self.assertEqual(result["status"], "OK")
+        self.assertEqual(calls, ["http", "http", "mcp"])
+        self.assertEqual(sleeps, [1.0])
+        self.assertEqual(
+            [row["transport"] for row in result["attempts"]],
+            ["http", "http", "mcp"],
+        )
+
+    def test_retry_after_above_bound_skips_same_route_retry(self):
+        calls = []
+        sleeps = []
+
+        result = self.forum.auto_invoke(
+            "read",
+            "read_post",
+            {"post_id": 6120},
+            http_invoker=lambda *args: calls.append("http") or {
+                "status": "RATE_LIMITED",
+                "retry_after_seconds": 30.0,
+                "error": "wait 30 seconds",
+            },
+            mcp_invoker=lambda *args: calls.append("mcp") or {
+                "status": "OK",
+                "data": {"post": {"id": 6120}},
+            },
+            sleep_fn=sleeps.append,
+        )
+        self.assertEqual(result["status"], "OK")
+        self.assertEqual(calls, ["http", "mcp"])
+        self.assertEqual(sleeps, [])
+        self.assertEqual(result["retry_policy"], "http-rate-limited-once")
+        self.assertEqual(result["retry_skipped"], "retry_after_exceeds_bound")
+
+    def test_non_rate_limited_read_failure_does_not_temporally_retry(self):
+        calls = []
+        sleeps = []
+        result = self.forum.auto_invoke(
+            "read",
+            "read_post",
+            {"post_id": 6120},
+            http_invoker=lambda *args: calls.append("http") or {
+                "status": "BLOCKED",
+                "error": "network unavailable",
+            },
+            mcp_invoker=lambda *args: calls.append("mcp") or {
+                "status": "OK",
+                "data": {"post": {"id": 6120}},
+            },
+            sleep_fn=sleeps.append,
+        )
+        self.assertEqual(calls, ["http", "mcp"])
+        self.assertEqual(sleeps, [])
+        self.assertEqual(result["status"], "OK")
 
     def test_http_call_spec_maps_every_domain_operation(self):
         cases = [

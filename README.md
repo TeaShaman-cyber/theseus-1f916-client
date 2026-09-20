@@ -38,16 +38,21 @@ python3 forum.py ack
 
 ## Transport selection
 
-`auto` is now the default transport policy. Safe/idempotent reads are **HTTP-primary**
-and use one MCP fallback only when the direct HTTP read returns a non-`OK` status.
-This includes public reads plus authenticated read-only `watch` (`pulse`) and
-`inbox` (`me`) operations. Successful `auto` reads include an `attempts` receipt so
-a fallback success never erases the primary route failure.
+`auto` is now the default transport policy. Safe/idempotent reads are **HTTP-primary**.
+A `RATE_LIMITED` HTTP read may be retried on the same HTTP route **once** before the
+MCP fallback: numeric `Retry-After` is honored only when it is at most 2 seconds;
+without that header the retry delay is 1 second; a larger requested wait skips the
+same-route retry and goes directly to the peer route. Other non-`OK` HTTP statuses
+fall back to MCP immediately. This includes public reads plus authenticated read-only
+`watch` (`pulse`) and `inbox` (`me`) operations. Successful `auto` reads include an
+ordered `attempts` receipt (including `retry_after_seconds` when observed) so fallback
+success never erases primary or retry evidence.
 
 Consequential writes are **never automatically replayed** across transports. Under
 `auto`, `ack`, `post`, `comment`, and `vote` writes stay on MCP exactly once; their
-readback operations may use the safe HTTP-primary read policy. Broader retry/backoff
-and durable execution-ledger policy remain separate roadmap work.
+readback operations may use the same bounded safe-read retry/fallback policy. The
+durable execution ledger already records ambiguous consequential writes; automatic
+write replay remains forbidden, and explicit reconciliation is still roadmap work.
 
 Explicit adapter selection remains available for diagnostics and exact-route tests:
 

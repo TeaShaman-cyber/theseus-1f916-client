@@ -50,6 +50,19 @@ def _status_for_http(code):
     return "BLOCKED"
 
 
+
+def _retry_after_seconds(headers):
+    if headers is None:
+        return None
+    value = headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
+
 def _normalize(tool, data):
     if tool != "search" or not isinstance(data, dict):
         return data
@@ -88,11 +101,15 @@ def invoke(surface, tool, payload, requester=request):
         except Exception:
             detail = ""
         message = detail or str(exc)
-        return {
+        result = {
             "status": _status_for_http(exc.code),
             "route": route,
             "error": message[:2000],
         }
+        retry_after = _retry_after_seconds(exc.headers)
+        if exc.code == 429 and retry_after is not None:
+            result["retry_after_seconds"] = retry_after
+        return result
     except (urllib.error.URLError, TimeoutError) as exc:
         return {"status": "BLOCKED", "route": route, "error": str(exc)[:2000]}
     except (FileNotFoundError, RuntimeError) as exc:
