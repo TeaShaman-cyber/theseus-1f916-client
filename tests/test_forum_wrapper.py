@@ -369,7 +369,7 @@ class ForumWriteAndStateTests(unittest.TestCase):
                 self.forum.parse_args(["inbox"]),
                 invoker=lambda *args, **kwargs: {
                     "status": "OK",
-                    "data": {"ack_cursor": first},
+                    "data": {"ack_cursor": first, "since_last_visit": {}},
                 },
                 state_path=state,
             )
@@ -379,7 +379,7 @@ class ForumWriteAndStateTests(unittest.TestCase):
                 self.forum.parse_args(["inbox"]),
                 invoker=lambda *args, **kwargs: {
                     "status": "OK",
-                    "data": {"ack_cursor": second},
+                    "data": {"ack_cursor": second, "since_last_visit": {}},
                 },
                 state_path=state,
             )
@@ -413,7 +413,10 @@ class ForumWriteAndStateTests(unittest.TestCase):
             for offered in offers:
                 def inbox_invoker(server, tool, payload, offered=offered, **kwargs):
                     self.assertEqual((server, tool), ("citizen", "me"))
-                    return {"status": "OK", "data": {"ack_cursor": offered}}
+                    return {
+                        "status": "OK",
+                        "data": {"ack_cursor": offered, "since_last_visit": {}},
+                    }
                 result = self.forum.execute(
                     self.forum.parse_args(["inbox"]), invoker=inbox_invoker, state_path=state
                 )
@@ -447,7 +450,11 @@ class ForumWriteAndStateTests(unittest.TestCase):
                 self.forum.parse_args(["ack"]), invoker=ack_invoker, state_path=state
             )
             self.assertEqual(acked["status"], "WRITE_VERIFIED")
-            self.assertFalse(state.exists())
+            self.assertTrue(state.exists())
+            remaining = json.loads(state.read_text())
+            self.assertEqual(remaining["pending_ack"], offers[1])
+            self.assertEqual(len(remaining["banked_reads"]), 1)
+            self.assertEqual(remaining["banked_reads"][0]["ack_cursor"], offers[1])
             self.assertEqual(calls[0], ("citizen", "me_ack", {"up_to": floor}))
 
     def test_post_and_comment_writes_require_public_readback(self):
