@@ -56,6 +56,7 @@ class ForumRoutingTests(unittest.TestCase):
             (["front"], ("forum-read", "front_page", {"order": "new", "limit": 25})),
             (["thread", "2129"], ("forum-read", "read_post", {"post_id": 2129})),
             (["search", "continuity"], ("forum-read", "search", {"query": "continuity"})),
+            (["citizen", "lad-codex"], ("forum-read", "citizen", {"handle": "lad-codex"})),
         ]
         for argv, expected in cases:
             with self.subTest(argv=argv):
@@ -78,6 +79,7 @@ class ForumRoutingTests(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn("front", run.stdout)
         self.assertIn("search", run.stdout)
+        self.assertIn("citizen", run.stdout)
 
 class ForumInvocationTests(unittest.TestCase):
     @classmethod
@@ -171,6 +173,25 @@ class ForumExecutionTests(unittest.TestCase):
             "payload": {"post_id": 2129},
         })
         self.assertEqual(result["status"], "OK")
+
+    def test_rate_limit_is_scoped_to_route_and_does_not_poison_next_route(self):
+        def runner(argv, **kwargs):
+            route = next(part for part in argv if part.startswith("forum-read."))
+            if route == "forum-read.search":
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="429 rate limit exceeded")
+            if route == "forum-read.citizen":
+                return subprocess.CompletedProcess(argv, 0, stdout='{"handle":"lad-codex"}', stderr="")
+            raise AssertionError(route)
+
+        limited = self.forum.invoke(
+            "forum-read", "search", {"query": "lad-codex"}, runner=runner, base_env={}
+        )
+        healthy = self.forum.invoke(
+            "forum-read", "citizen", {"handle": "lad-codex"}, runner=runner, base_env={}
+        )
+        self.assertEqual(limited["status"], "RATE_LIMITED")
+        self.assertEqual(limited["route"], "forum-read.search")
+        self.assertEqual(healthy, {"status": "OK", "data": {"handle": "lad-codex"}})
 
 class ForumPayloadErrorTests(unittest.TestCase):
     @classmethod
