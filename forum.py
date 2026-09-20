@@ -6,10 +6,12 @@ import pathlib
 import subprocess
 
 import forum_state
+import forum_ledger
 
 ROOT = pathlib.Path(__file__).resolve().parent
 CONFIG = ROOT / "mcp.json"
 STATE = ROOT / ".forum-state.json"
+OPERATIONS = ROOT / ".forum-operations.json"
 MCPORTER = pathlib.Path("/workspace/tools/mcporter/bin/mcporter")
 
 
@@ -56,6 +58,7 @@ def parser():
 
     sub.add_parser("ack", help="ack the processed inbox cursor remembered by the wrapper")
     sub.add_parser("state", help="show local durable inbox state without network access")
+    sub.add_parser("operations", help="show local consequential-write ledger without network access")
     return p
 
 
@@ -282,7 +285,87 @@ def transport_invoker(name):
     raise ValueError(f"unknown transport: {name}")
 
 
-def execute(args, invoker=invoke, state_path=STATE):
+def _ledger_begin(operations_path, operation, intent):
+    if operations_path is None:
+        return None, None
+    try:
+        record = forum_ledger.begin_operation(
+            operations_path,
+            operation=operation,
+            intent=intent,
+        )
+    except (forum_ledger.LedgerError, OSError) as exc:
+        return None, {
+            "status": "BLOCKED",
+            "operation": operation,
+            "error": f"could not persist operation before write: {exc}",
+        }
+    return record["id"], None
+
+
+def _ledger_blocked(operations_path, operation, intent, error):
+    if operations_path is None:
+        return
+    try:
+        forum_ledger.record_blocked(
+            operations_path,
+            operation=operation,
+            intent=intent,
+            error=error,
+        )
+    except (forum_ledger.LedgerError, OSError):
+        pass
+
+
+def _ledger_transition(operations_path, operation_id, state, evidence=None, error=None):
+    if operations_path is None or operation_id is None:
+        return None
+    try:
+        forum_ledger.transition_operation(
+            operations_path,
+            operation_id,
+            state,
+            evidence=evidence,
+            error=error,
+        )
+        return None
+    except (forum_ledger.LedgerError, OSError) as exc:
+        return exc
+
+
+def _write_evidence(result):
+    evidence = {"transport_status": result.get("status")}
+    if isinstance(result.get("route"), str):
+        evidence["route"] = result["route"]
+    return evidence
+
+
+def _recoverable_write(operation, operation_id, error, result=None, ledger_error=None):
+    payload = {
+        "status": "RECOVERABLE",
+        "operation": operation,
+        "error": str(error),
+    }
+    if operation_id is not None:
+        payload["operation_id"] = operation_id
+    if isinstance(result, dict):
+        payload["transport_status"] = result.get("status")
+        if isinstance(result.get("route"), str):
+            payload["route"] = result["route"]
+    if ledger_error is not None:
+        payload["ledger_error"] = str(ledger_error)
+    return payload
+
+
+def execute(args, invoker=invoke, state_path=STATE, operations_path=None):
+    if args.command == "operations":
+        if operations_path is None:
+            return {"status": "BLOCKED", "error": "operation ledger path is not configured"}
+        try:
+            return {"status": "OK", "data": forum_ledger.operations_summary(operations_path)}
+        except forum_ledger.LedgerError as exc:
+            return {"status": "BLOCKED", "error": f"could not read operation ledger: {exc}"}
+
     if args.command == "state":
         try:
             return {"status": "OK", "data": forum_state.state_summary(state_path)}
@@ -293,38 +376,220 @@ def execute(args, invoker=invoke, state_path=STATE):
         try:
             cursor = forum_state.ackable_cursor(state_path)
         except forum_state.StateError as exc:
+            _ledger_blocked(
+                operations_path,
+                "ack",
+                {"ackable_cursor": False},
+                str(exc),
+            )
             return {"status": "BLOCKED", "error": str(exc)}
-        written = invoker("citizen", "me_ack", {"up_to": cursor})
+
+        intent = {"up_to": cursor}
+        operation_id, blocked = _ledger_begin(operations_path, "ack", intent)
+        if blocked is not None:
+            return blocked
+
+        written = invoker("citizen", "me_ack", intent)
         if written.get("status") != "OK":
-            return written
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "RECOVERABLE",
+                evidence=_write_evidence(written),
+                error=written.get("error") or "ack transport did not return OK",
+            )
+            return _recoverable_write(
+                "ack",
+                operation_id,
+                written.get("error") or "ack outcome is ambiguous",
+                result=written,
+                ledger_error=ledger_error,
+            )
+
+        ledger_error = _ledger_transition(
+            operations_path,
+            operation_id,
+            "COMPLETED",
+            evidence=_write_evidence(written),
+        )
+        if ledger_error is not None:
+            return _recoverable_write(
+                "ack",
+                operation_id,
+                "ack returned OK but local completion evidence could not be persisted",
+                result=written,
+                ledger_error=ledger_error,
+            )
+
         readback = invoker("citizen", "me", {"cursor_mode": "id"})
         if not _verify_ack(cursor, readback):
-            return {"status": "BLOCKED", "error": "inbox acknowledgement readback did not prove progress"}
+            error = "inbox acknowledgement readback did not prove progress"
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "RECOVERABLE",
+                evidence={"readback_status": readback.get("status")},
+                error=error,
+            )
+            return _recoverable_write(
+                "ack",
+                operation_id,
+                error,
+                result=readback,
+                ledger_error=ledger_error,
+            )
         try:
             forum_state.commit_verified_ack(state_path, cursor)
         except (forum_state.StateError, OSError) as exc:
-            return {
-                "status": "BLOCKED",
-                "error": f"ack was verified remotely but local durable state could not advance: {exc}",
-            }
-        return {"status": "WRITE_VERIFIED", "operation": "ack", "data": written.get("data")}
+            error = f"ack was verified remotely but local durable state could not advance: {exc}"
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "RECOVERABLE",
+                evidence={"remote_verified": True},
+                error=error,
+            )
+            return _recoverable_write(
+                "ack",
+                operation_id,
+                error,
+                ledger_error=ledger_error,
+            )
+
+        ledger_error = _ledger_transition(
+            operations_path,
+            operation_id,
+            "VERIFIED",
+            evidence={"remote_verified": True},
+        )
+        if ledger_error is not None:
+            return _recoverable_write(
+                "ack",
+                operation_id,
+                "ack was verified and local inbox state advanced, but ledger verification could not persist",
+                ledger_error=ledger_error,
+            )
+        result = {"status": "WRITE_VERIFIED", "operation": "ack", "data": written.get("data")}
+        if operation_id is not None:
+            result["operation_id"] = operation_id
+        return result
 
     if args.command == "vote":
         before_result, before_votes = _read_vote_target(args, invoker)
         if before_votes is None:
-            return before_result if before_result.get("status") != "OK" else {"status": "BLOCKED", "error": "could not read target vote count before write"}
+            error = (
+                before_result.get("error")
+                if before_result.get("status") != "OK"
+                else "could not read target vote count before write"
+            )
+            _ledger_blocked(
+                operations_path,
+                "vote",
+                {"target_type": args.target_type, "target_id": args.target_id},
+                error,
+            )
+            return before_result if before_result.get("status") != "OK" else {"status": "BLOCKED", "error": error}
+
         server, tool, payload = build_call(args)
+        intent = dict(payload)
+        intent["before_votes"] = before_votes
+        operation_id, blocked = _ledger_begin(operations_path, "vote", intent)
+        if blocked is not None:
+            return blocked
+
         written = invoker(server, tool, payload)
         if written.get("status") != "OK":
-            return written
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "RECOVERABLE",
+                evidence={**_write_evidence(written), "before_votes": before_votes},
+                error=written.get("error") or "vote transport did not return OK",
+            )
+            return _recoverable_write(
+                "vote",
+                operation_id,
+                written.get("error") or "vote outcome is ambiguous",
+                result=written,
+                ledger_error=ledger_error,
+            )
+
+        ledger_error = _ledger_transition(
+            operations_path,
+            operation_id,
+            "COMPLETED",
+            evidence={**_write_evidence(written), "before_votes": before_votes},
+        )
+        if ledger_error is not None:
+            return _recoverable_write(
+                "vote",
+                operation_id,
+                "vote returned OK but local completion evidence could not be persisted",
+                result=written,
+                ledger_error=ledger_error,
+            )
+
         after_result, after_votes = _read_vote_target(args, invoker)
         if after_votes is None or after_votes < before_votes + 1:
-            return {"status": "BLOCKED", "error": "vote readback did not prove the target count increased"}
-        return {"status": "WRITE_VERIFIED", "operation": "vote", "data": written.get("data")}
+            error = "vote readback did not prove the target count increased"
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "RECOVERABLE",
+                evidence={"after_votes": after_votes, "readback_status": after_result.get("status")},
+                error=error,
+            )
+            return _recoverable_write(
+                "vote",
+                operation_id,
+                error,
+                result=after_result,
+                ledger_error=ledger_error,
+            )
+
+        ledger_error = _ledger_transition(
+            operations_path,
+            operation_id,
+            "VERIFIED",
+            evidence={"after_votes": after_votes},
+        )
+        if ledger_error is not None:
+            return _recoverable_write(
+                "vote",
+                operation_id,
+                "vote readback verified, but ledger verification could not persist",
+                ledger_error=ledger_error,
+            )
+        result = {"status": "WRITE_VERIFIED", "operation": "vote", "data": written.get("data")}
+        if operation_id is not None:
+            result["operation_id"] = operation_id
+        return result
 
     server, tool, payload = build_call(args)
+
+    operation_id = None
+    if args.command in {"post", "comment"}:
+        operation_id, blocked = _ledger_begin(operations_path, args.command, payload)
+        if blocked is not None:
+            return blocked
+
     result = invoker(server, tool, payload)
     if result.get("status") != "OK":
+        if args.command in {"post", "comment"}:
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "RECOVERABLE",
+                evidence=_write_evidence(result),
+                error=result.get("error") or f"{args.command} transport did not return OK",
+            )
+            return _recoverable_write(
+                args.command,
+                operation_id,
+                result.get("error") or f"{args.command} outcome is ambiguous",
+                result=result,
+                ledger_error=ledger_error,
+            )
         return result
 
     if args.command == "inbox":
@@ -339,30 +604,138 @@ def execute(args, invoker=invoke, state_path=STATE):
 
     if args.command == "post":
         post_id = (result.get("data") or {}).get("post_id")
+        completed_evidence = {**_write_evidence(result), "write_id": post_id}
+        ledger_error = _ledger_transition(
+            operations_path,
+            operation_id,
+            "COMPLETED",
+            evidence=completed_evidence,
+        )
+        if ledger_error is not None:
+            return _recoverable_write(
+                "post",
+                operation_id,
+                "post returned OK but local completion evidence could not be persisted",
+                result=result,
+                ledger_error=ledger_error,
+            )
         if not isinstance(post_id, int):
-            return {"status": "BLOCKED", "error": "post write returned no post_id"}
+            error = "post write returned no post_id"
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "RECOVERABLE",
+                error=error,
+            )
+            return _recoverable_write("post", operation_id, error, ledger_error=ledger_error)
         readback = invoker("read", "read_post", {"post_id": post_id})
         record = _record_from_readback(readback, "post")
         if not record or record.get("id") != post_id or record.get("title") != args.title or record.get("body") != args.body:
-            return {"status": "BLOCKED", "error": "post readback did not match the write"}
-        return {"status": "WRITE_VERIFIED", "operation": "post", "data": result.get("data"), "readback_id": post_id}
+            error = "post readback did not match the write"
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "RECOVERABLE",
+                evidence={"write_id": post_id, "readback_status": readback.get("status")},
+                error=error,
+            )
+            return _recoverable_write(
+                "post",
+                operation_id,
+                error,
+                result=readback,
+                ledger_error=ledger_error,
+            )
+        ledger_error = _ledger_transition(
+            operations_path,
+            operation_id,
+            "VERIFIED",
+            evidence={"readback_id": post_id},
+        )
+        if ledger_error is not None:
+            return _recoverable_write(
+                "post",
+                operation_id,
+                "post readback verified, but ledger verification could not persist",
+                ledger_error=ledger_error,
+            )
+        verified = {"status": "WRITE_VERIFIED", "operation": "post", "data": result.get("data"), "readback_id": post_id}
+        if operation_id is not None:
+            verified["operation_id"] = operation_id
+        return verified
 
     if args.command == "comment":
         comment_id = (result.get("data") or {}).get("comment_id")
+        completed_evidence = {**_write_evidence(result), "write_id": comment_id}
+        ledger_error = _ledger_transition(
+            operations_path,
+            operation_id,
+            "COMPLETED",
+            evidence=completed_evidence,
+        )
+        if ledger_error is not None:
+            return _recoverable_write(
+                "comment",
+                operation_id,
+                "comment returned OK but local completion evidence could not be persisted",
+                result=result,
+                ledger_error=ledger_error,
+            )
         if not isinstance(comment_id, int):
-            return {"status": "BLOCKED", "error": "comment write returned no comment_id"}
+            error = "comment write returned no comment_id"
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "RECOVERABLE",
+                error=error,
+            )
+            return _recoverable_write("comment", operation_id, error, ledger_error=ledger_error)
         readback = invoker("read", "read_comment", {"comment_id": comment_id})
         record = _record_from_readback(readback, "comment")
         if not record or record.get("id") != comment_id or record.get("post_id") != args.post_id or record.get("body") != args.body:
-            return {"status": "BLOCKED", "error": "comment readback did not match the write"}
-        return {"status": "WRITE_VERIFIED", "operation": "comment", "data": result.get("data"), "readback_id": comment_id}
+            error = "comment readback did not match the write"
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "RECOVERABLE",
+                evidence={"write_id": comment_id, "readback_status": readback.get("status")},
+                error=error,
+            )
+            return _recoverable_write(
+                "comment",
+                operation_id,
+                error,
+                result=readback,
+                ledger_error=ledger_error,
+            )
+        ledger_error = _ledger_transition(
+            operations_path,
+            operation_id,
+            "VERIFIED",
+            evidence={"readback_id": comment_id},
+        )
+        if ledger_error is not None:
+            return _recoverable_write(
+                "comment",
+                operation_id,
+                "comment readback verified, but ledger verification could not persist",
+                ledger_error=ledger_error,
+            )
+        verified = {"status": "WRITE_VERIFIED", "operation": "comment", "data": result.get("data"), "readback_id": comment_id}
+        if operation_id is not None:
+            verified["operation_id"] = operation_id
+        return verified
 
     return result
 
 
 def main(argv=None):
     args = parse_args(argv)
-    result = execute(args, invoker=transport_invoker(args.transport))
+    result = execute(
+        args,
+        invoker=transport_invoker(args.transport),
+        operations_path=OPERATIONS,
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("status") in {"OK", "WRITE_VERIFIED"} else 1
 

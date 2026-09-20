@@ -7,7 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "property-test.yml"
 LOCK = ROOT / "requirements" / "ci-property.txt"
 ENDPOINT = ROOT / "tools" / "ci" / "property-test"
-PROPERTY = ROOT / "property_tests" / "test_state_properties.py"
+STATE_PROPERTY = ROOT / "property_tests" / "test_state_properties.py"
+LEDGER_PROPERTY = ROOT / "property_tests" / "test_ledger_properties.py"
 PROFILE_SHA = "0fa76f7aa1ccad2fb175591c9497157d8c60e481"
 
 
@@ -47,12 +48,16 @@ class PropertyCiConsumerContractTest(unittest.TestCase):
         self.assertIn("HYPOTHESIS_STORAGE_DIRECTORY", text)
 
     def test_property_settings_are_bounded_and_database_free(self):
-        text = PROPERTY.read_text()
-        self.assertIn("max_examples=250", text)
-        self.assertIn("deadline=None", text)
-        self.assertIn("derandomize=True", text)
-        self.assertIn("database=None", text)
-        self.assertEqual(text.count("@PROPERTY_SETTINGS"), 3)
+        texts = [STATE_PROPERTY.read_text(), LEDGER_PROPERTY.read_text()]
+        for text in texts:
+            self.assertIn("max_examples=250", text)
+            self.assertIn("deadline=None", text)
+            self.assertIn("derandomize=True", text)
+            self.assertIn("database=None", text)
+            self.assertEqual(text.count("@PROPERTY_SETTINGS"), 3)
+        endpoint = ENDPOINT.read_text()
+        self.assertIn("suite=state-machines", endpoint)
+        self.assertIn("properties=6", endpoint)
 
 
 if __name__ == "__main__":

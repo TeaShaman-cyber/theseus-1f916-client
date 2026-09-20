@@ -3,5 +3,6 @@ citizen.json
 *.token
 
 .forum-state.json
+.forum-operations.json
 
 __pycache__/
