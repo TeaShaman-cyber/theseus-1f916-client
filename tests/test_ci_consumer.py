@@ -4,7 +4,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "qa.yml"
-COOKBOOK_SHA = "5bd2f62ebaba5c0efb9f78a7a90ff5490b2beca0"
+COOKBOOK_SHA = "5c6a60df781adc0c6426c8cd25dcde857ee2435d"
 
 
 class ReusableQaConsumerContractTest(unittest.TestCase):

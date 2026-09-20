@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   dev-check:
-    uses: TeaShaman-cyber/marcopolo-cookbook/.github/workflows/reusable-canonical-qa.yml@5bd2f62ebaba5c0efb9f78a7a90ff5490b2beca0
+    uses: TeaShaman-cyber/marcopolo-cookbook/.github/workflows/reusable-canonical-qa.yml@5c6a60df781adc0c6426c8cd25dcde857ee2435d
     with:
       python_version: "3.11"
       qa_endpoint: tools/dev/check
