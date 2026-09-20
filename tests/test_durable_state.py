@@ -278,6 +278,31 @@ class DurableStateContractTests(unittest.TestCase):
                 [second, third],
             )
 
+    def test_commit_verified_ack_refuses_recovery_state_directly(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            legacy = cursor(100, 10, 20, "legacy")
+            path.write_text(json.dumps({"pending_ack": legacy}))
+            before = path.read_bytes()
+
+            with self.assertRaises(forum_state.StateError):
+                forum_state.commit_verified_ack(path, legacy, now_ms=2_000)
+
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_commit_verified_ack_updates_timestamp_from_supplied_clock(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            floor = cursor(100, 10, 20, "seal-floor")
+            later = cursor(120, 11, 21, "seal-later")
+            forum_state.bank_inbox_page(path, inbox_data(floor, 1), now_ms=1_000)
+            forum_state.bank_inbox_page(path, inbox_data(later, 2), now_ms=2_000)
+
+            state = forum_state.commit_verified_ack(path, floor, now_ms=9_000)
+
+            self.assertEqual(state["updated_at_ms"], 9_000)
+            self.assertEqual(forum_state.load_state(path)["updated_at_ms"], 9_000)
+
     def test_verified_floor_ack_prunes_only_covered_banked_reads(self):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "state.json"
