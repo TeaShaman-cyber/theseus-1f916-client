@@ -167,7 +167,7 @@ class ReleaseCandidateEvaluationTests(unittest.TestCase):
     def _args(self, review_path):
         return argparse.Namespace(
             expected_sha=SHA,
-            expected_version="1.0.0-rc.1",
+            expected_version=(ROOT / "VERSION").read_text().strip(),
             canonical_run=100,
             property_run=101,
             review_receipt=str(review_path),
