@@ -107,3 +107,17 @@ Transport adapters may expose different route metadata, timestamps, cache receip
 A v1 release candidate must pass the repository release-candidate gate on an exact clean `main`, with local/remote commit identity, hosted exact-source QA/property evidence, conformance coverage, and proportional independent review evidence bound to that exact head.
 
 The RC gate verifies readiness; it does not grant publication authority. Updating to the final `1.0.0` version, creating/pushing `v1.0.0`, and publishing the GitHub Release are separate promotion actions requiring explicit current authorization and exact remote readback.
+
+The repo-owned gate is invoked as:
+
+```bash
+tools/dev/release-candidate \
+  --expected-sha <40-hex-main-sha> \
+  --expected-version 1.0.0-rc.1 \
+  --canonical-run <github-actions-run-id> \
+  --property-run <github-actions-run-id> \
+  --review-receipt /tmp/review-receipt.json \
+  --receipt /tmp/rc-receipt.json
+```
+
+The review receipt is ephemeral evidence, not tracked release state. It uses schema version 1, names the exact candidate SHA, uses disposition `NO_SUBSTANTIVE_UNRESOLVED_FINDINGS`, and contains at least one evidence item with `channel`, `ref`, and `independent: true`. The gate fetches current `origin/main`, requires clean `main == origin/main == expected SHA`, runs the targeted transport-conformance suite plus `tools/dev/check`, verifies hosted canonical/property source and checkout SHAs from their logs, and emits `status=RC_READY` with `promotion_authorized=false`. Receipts must be written outside the repository worktree.

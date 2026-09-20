@@ -19,6 +19,7 @@ fi
 
 printf '%s\n' '== python syntax =='
 python3 -m compileall -q forum.py client.py tests
+python3 -m py_compile tools/dev/release_candidate.py
 
 printf '%s\n' '== unit tests =='
 python3 -m unittest discover -s tests -v
