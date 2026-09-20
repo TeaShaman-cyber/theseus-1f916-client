@@ -112,6 +112,35 @@ class DurableStateContractTests(unittest.TestCase):
             self.assertEqual(summary["oldest_age_seconds"], 5.5)
             self.assertEqual(summary["pending_ack"], offered)
 
+    def test_bank_without_explicit_clock_uses_now_for_new_page_and_updated_at(self):
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            first = cursor(100, 10, 20, "seal-first")
+            later = cursor(120, 11, 21, "seal-later")
+            forum_state.bank_inbox_page(path, inbox_data(first, 1), now_ms=1_000)
+
+            with mock.patch("forum_state._now_ms", return_value=9_000):
+                state = forum_state.bank_inbox_page(path, inbox_data(later, 2))
+
+            self.assertEqual(state["updated_at_ms"], 9_000)
+            self.assertEqual(state["banked_reads"][-1]["banked_at_ms"], 9_000)
+            self.assertEqual(forum_state.load_state(path)["updated_at_ms"], 9_000)
+
+    def test_fresh_bank_recovery_reset_starts_new_state_at_bank_time(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            legacy = cursor(500, 50, 50, "legacy")
+            path.write_text(json.dumps({"pending_ack": legacy}))
+            offered = cursor(400, 40, 40, "fresh")
+
+            state = forum_state.bank_inbox_page(path, inbox_data(offered, 3), now_ms=7_000)
+
+            self.assertEqual(state["created_at_ms"], 7_000)
+            self.assertEqual(state["updated_at_ms"], 7_000)
+            self.assertEqual(forum_state.load_state(path)["created_at_ms"], 7_000)
+
     def test_second_bank_keeps_exact_safe_floor_and_banks_both_pages(self):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "state.json"
