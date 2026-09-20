@@ -5,7 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$ROOT"
 
 printf '%s\n' '== secret/runtime boundary =='
-for forbidden in citizen.json .forum-state.json; do
+for forbidden in citizen.json .forum-state.json .forum-operations.json .forum-cache.json; do
   if git ls-files --error-unmatch "$forbidden" >/dev/null 2>&1; then
     printf 'QA_SECRET_BOUNDARY_ERROR: tracked=%s\n' "$forbidden" >&2
     exit 2

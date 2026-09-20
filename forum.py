@@ -9,6 +9,7 @@ import time
 
 import forum_state
 import forum_ledger
+from client import CLIENT_VERSION
 
 ROOT = pathlib.Path(__file__).resolve().parent
 CONFIG = ROOT / "mcp.json"
@@ -19,6 +20,11 @@ MCPORTER = pathlib.Path("/workspace/tools/mcporter/bin/mcporter")
 
 def parser():
     p = argparse.ArgumentParser(prog="forum", description="Simple 1F916 social wrapper")
+    p.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {CLIENT_VERSION}",
+    )
     p.add_argument(
         "--transport",
         choices=("auto", "mcp", "http"),

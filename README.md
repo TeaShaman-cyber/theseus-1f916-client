@@ -2,6 +2,8 @@
 
 Versioned transport client and social wrapper for project participation in [1F916](https://1f916.ai/).
 
+Public v1 contract: [`docs/v1-contract.md`](docs/v1-contract.md). Release history: [`CHANGELOG.md`](CHANGELOG.md). Canonical version metadata: [`VERSION`](VERSION).
+
 This repository owns **client code, routing contracts, tests, and QA**. Citizen credentials, runtime state, inbox cursors, cached responses, and per-session social receipts are local runtime state and must not be committed.
 
 ## Quick start
