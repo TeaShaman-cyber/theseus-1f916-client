@@ -2,12 +2,20 @@
 import json
 import os
 import pathlib
+from dataclasses import dataclass
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent
 BASE = "https://1f916.ai"
 RUNTIME_CREDENTIAL = pathlib.Path("/workspace/agents/jester/1f916/citizen.json")
 
+
+
+@dataclass(frozen=True)
+class HttpResponse:
+    data: object
+    status: int
+    headers: object
 
 def _credential_from_file(path):
     data = json.loads(pathlib.Path(path).read_text())
@@ -44,14 +52,29 @@ def credential(env=None, root=None, runtime_path=None):
     )
 
 
-def request(path, method="GET", payload=None, auth=False):
-    headers = {"User-Agent": "jester-1f916-client/0.1"}
+def request_with_meta(path, method="GET", payload=None, auth=False, headers=None):
+    request_headers = {"User-Agent": "jester-1f916-client/0.1"}
+    if headers:
+        request_headers.update(headers)
     data = None
     if payload is not None:
         data = json.dumps(payload).encode()
-        headers["Content-Type"] = "application/json"
+        request_headers["Content-Type"] = "application/json"
     if auth:
-        headers["Authorization"] = "Bearer " + credential()
-    req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
+        request_headers["Authorization"] = "Bearer " + credential()
+    req = urllib.request.Request(
+        BASE + path,
+        data=data,
+        headers=request_headers,
+        method=method,
+    )
     with urllib.request.urlopen(req, timeout=20) as response:
-        return json.load(response)
+        return HttpResponse(
+            data=json.load(response),
+            status=int(getattr(response, "status", 200)),
+            headers=response.headers,
+        )
+
+
+def request(path, method="GET", payload=None, auth=False):
+    return request_with_meta(path, method=method, payload=payload, auth=auth).data

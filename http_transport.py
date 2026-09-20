@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 import urllib.error
+import pathlib
 import urllib.parse
 
-from client import request
+import forum_cache
+from client import request_with_meta
+
+
+ROOT = pathlib.Path(__file__).resolve().parent
+CACHE = ROOT / ".forum-cache.json"
 
 
 def _query(path, params):
@@ -63,6 +69,55 @@ def _retry_after_seconds(headers):
         return None
     return seconds if seconds >= 0 else None
 
+
+def _header(headers, name):
+    if headers is None:
+        return None
+    try:
+        value = headers.get(name)
+    except AttributeError:
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+def _response_parts(value):
+    if hasattr(value, "data") and hasattr(value, "headers"):
+        return value.data, int(getattr(value, "status", 200)), value.headers
+    return value, 200, None
+
+
+def _public_cacheable(surface, method):
+    return surface == "read" and method == "GET"
+
+
+def _cache_control_no_store(headers):
+    value = _header(headers, "Cache-Control")
+    return bool(value and "no-store" in value.lower())
+
+
+def _cached_revalidation(route, entry, sent_etag, response_etag=None):
+    if entry is None or not sent_etag or entry.get("etag") != sent_etag:
+        return {
+            "status": "BLOCKED",
+            "route": route,
+            "cache_status": "MISS_ON_304",
+            "error": "HTTP 304 arrived without a matching cached validator/body",
+        }
+    if response_etag is not None and response_etag != sent_etag:
+        return {
+            "status": "BLOCKED",
+            "route": route,
+            "cache_status": "VALIDATOR_MISMATCH",
+            "error": "HTTP 304 validator does not match the cached validator",
+        }
+    return {
+        "status": "OK",
+        "route": route,
+        "data": entry["data"],
+        "cache_status": "REVALIDATED",
+        "etag": sent_etag,
+    }
+
 def _normalize(tool, data):
     if tool != "search" or not isinstance(data, dict):
         return data
@@ -82,7 +137,9 @@ def _normalize(tool, data):
     }
 
 
-def invoke(surface, tool, payload, requester=request):
+def invoke(surface, tool, payload, requester=None, cache_path=CACHE):
+    if requester is None:
+        requester = request_with_meta
     try:
         method, path, body, auth = call_spec(surface, tool, payload)
     except (KeyError, TypeError, ValueError) as exc:
@@ -93,9 +150,45 @@ def invoke(surface, tool, payload, requester=request):
         }
 
     route = f"http:{method} {path.split('?', 1)[0]}"
+    cache_enabled = cache_path is not None and _public_cacheable(surface, method)
+    cache_key = forum_cache.cache_key(method, path) if cache_enabled else None
+    cache_entry = forum_cache.lookup(cache_path, cache_key) if cache_enabled else None
+    sent_etag = cache_entry.get("etag") if isinstance(cache_entry, dict) else None
+    conditional_headers = {"If-None-Match": sent_etag} if sent_etag else None
+
     try:
-        data = requester(path, method=method, payload=body, auth=auth)
+        if conditional_headers is None:
+            response = requester(path, method=method, payload=body, auth=auth)
+        else:
+            response = requester(
+                path,
+                method=method,
+                payload=body,
+                auth=auth,
+                headers=conditional_headers,
+            )
+        data, response_status, response_headers = _response_parts(response)
+        if response_status == 304:
+            return _cached_revalidation(
+                route,
+                cache_entry,
+                sent_etag,
+                response_etag=_header(response_headers, "ETag"),
+            )
+        if response_status < 200 or response_status >= 300:
+            return {
+                "status": "BLOCKED",
+                "route": route,
+                "error": f"unexpected HTTP status {response_status}",
+            }
     except urllib.error.HTTPError as exc:
+        if exc.code == 304:
+            return _cached_revalidation(
+                route,
+                cache_entry,
+                sent_etag,
+                response_etag=_header(exc.headers, "ETag"),
+            )
         try:
             detail = exc.read().decode("utf-8", errors="replace").strip()
         except Exception:
@@ -121,4 +214,46 @@ def invoke(surface, tool, payload, requester=request):
 
     if isinstance(data, dict) and isinstance(data.get("error"), str):
         return {"status": "BLOCKED", "route": route, "error": data["error"][:2000]}
-    return {"status": "OK", "data": _normalize(tool, data)}
+
+    normalized = _normalize(tool, data)
+    result = {"status": "OK", "data": normalized}
+    if not cache_enabled or response_headers is None:
+        return result
+
+    if _cache_control_no_store(response_headers):
+        try:
+            forum_cache.invalidate(cache_path, cache_key)
+        except (OSError, ValueError, TypeError) as exc:
+            result["cache_status"] = "DEGRADED"
+            result["cache_error"] = str(exc)[:1000]
+            return result
+        result["cache_status"] = "NO_STORE"
+        return result
+
+    response_etag = _header(response_headers, "ETag")
+    if not response_etag:
+        try:
+            forum_cache.invalidate(cache_path, cache_key)
+        except (OSError, ValueError, TypeError) as exc:
+            result["cache_status"] = "DEGRADED"
+            result["cache_error"] = str(exc)[:1000]
+            return result
+        result["cache_status"] = "NO_VALIDATOR"
+        return result
+
+    try:
+        forum_cache.store(
+            cache_path,
+            cache_key,
+            route=route,
+            etag=response_etag,
+            data=normalized,
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        result["cache_status"] = "DEGRADED"
+        result["cache_error"] = str(exc)[:1000]
+        result["etag"] = response_etag
+        return result
+    result["cache_status"] = "STORED"
+    result["etag"] = response_etag
+    return result

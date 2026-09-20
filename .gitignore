@@ -4,5 +4,6 @@ citizen.json
 
 .forum-state.json
 .forum-operations.json
+.forum-cache.json
 
 __pycache__/

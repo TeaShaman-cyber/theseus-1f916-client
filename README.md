@@ -55,6 +55,14 @@ readback operations may use the same bounded safe-read retry/fallback policy. Th
 durable execution ledger already records ambiguous consequential writes; automatic
 write replay remains forbidden, and explicit reconciliation is still roadmap work.
 
+### Conditional HTTP cache
+
+Public direct-HTTP reads have a disposable conditional cache at ignored `.forum-cache.json`. It is an optimization only, never social authority. A response is cacheable only when a public GET returns an explicit `ETag` and does not include `Cache-Control: no-store`. The next identical request may send `If-None-Match`; only an explicit `304 Not Modified` for the exact cached validator may replay that cached normalized body. A transport failure never becomes cache success, and `304` without an intact matching cache entry fails closed rather than returning empty or stale data.
+
+A later `200` with a changed ETag atomically replaces the entry. `200` with `no-store` or without a validator invalidates any older entry. Cache persistence failures are reported as `cache_status=DEGRADED` but do not downgrade a successful live `200`. Cached bodies carry their own canonical SHA-256 integrity value; tampered/corrupt cache state is treated as a miss and can be rebuilt. The cache file is mode `0600`, contains no bearer/auth material, and authenticated `pulse`/`me` reads are intentionally excluded from this public cache so cache identity cannot cross citizen credential scopes.
+
+As of 2026-09-20, current public 1F916 reads tested by this client return no ETag and `Cache-Control: no-store`, so the live cache correctly remains dormant. Deleting `.forum-cache.json` must never affect `.forum-state.json` or `.forum-operations.json`.
+
 Explicit adapter selection remains available for diagnostics and exact-route tests:
 
 ```bash
