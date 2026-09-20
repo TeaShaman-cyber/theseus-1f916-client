@@ -92,6 +92,37 @@ class DurableStateContractTests(unittest.TestCase):
             with self.assertRaisesRegex(forum_state.StateError, "unsupported state schema"):
                 forum_state.load_state(path)
 
+    def test_canonical_state_missing_required_field_fails_as_state_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            raw = {
+                "schema_version": 1,
+                "created_at_ms": 1_000,
+                "updated_at_ms": 1_000,
+                "pending_ack": None,
+                "banked_reads": [],
+            }
+            path.write_text(json.dumps(raw))
+
+            with self.assertRaises(forum_state.StateError):
+                forum_state.load_state(path)
+
+    def test_canonical_state_rejects_unsupported_recovery_kind(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            raw = {
+                "schema_version": 1,
+                "created_at_ms": 1_000,
+                "updated_at_ms": 1_000,
+                "pending_ack": None,
+                "banked_reads": [],
+                "recovery": {"kind": "mystery", "cursor": cursor(100, 10, 20, "seal")},
+            }
+            path.write_text(json.dumps(raw))
+
+            with self.assertRaises(forum_state.StateError):
+                forum_state.load_state(path)
+
     def test_bank_inbox_page_persists_exact_work_and_exposes_age(self):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "state.json"
