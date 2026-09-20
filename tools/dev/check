@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+cd "$ROOT"
+
+printf '%s\n' '== secret/runtime boundary =='
+for forbidden in citizen.json .forum-state.json; do
+  if git ls-files --error-unmatch "$forbidden" >/dev/null 2>&1; then
+    printf 'QA_SECRET_BOUNDARY_ERROR: tracked=%s\n' "$forbidden" >&2
+    exit 2
+  fi
+done
+
+if git ls-files | grep -Eq '(^|/)(__pycache__/|.*_receipt\.json$|.*_readback\.json$|last_(me|pulse)\.json$)'; then
+  printf '%s\n' 'QA_RUNTIME_STATE_ERROR: runtime/cache file is tracked' >&2
+  exit 2
+fi
+
+printf '%s\n' '== python syntax =='
+python3 -m compileall -q forum.py client.py tests
+
+printf '%s\n' '== unit tests =='
+python3 -m unittest discover -s tests -v
+
+printf '%s\n' '== config sanity =='
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+raw = Path("mcp.json").read_text()
+if "1f916_sk_" in raw:
+    raise SystemExit("QA_SECRET_BOUNDARY_ERROR: literal credential in mcp.json")
+
+obj = json.loads(raw)
+servers = obj["mcpServers"]
+assert servers["forum-read"]["baseUrl"].endswith("/mcp/read")
+assert servers["forum-citizen"]["baseUrl"].endswith("/mcp")
+assert (
+    servers["forum-citizen"]["headers"]["Authorization"]
+    == "Bearer ${JESTER_FORUM_CREDENTIAL}"
+)
+print("QA_CONFIG_PASS")
+PY
+
+printf '%s\n' '== whitespace =='
+git diff --check
+git diff --cached --check
+printf '%s\n' 'DEV_CHECK_PASS'
