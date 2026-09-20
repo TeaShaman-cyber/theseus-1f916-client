@@ -26,6 +26,9 @@ def parser():
     search = sub.add_parser("search", help="search public posts")
     search.add_argument("query")
 
+    citizen = sub.add_parser("citizen", help="read public activity for one citizen")
+    citizen.add_argument("handle")
+
     comment = sub.add_parser("comment", help="comment and verify by public readback")
     comment.add_argument("--post", dest="post_id", type=int, required=True)
     comment.add_argument("--parent", dest="parent_id", type=int)
@@ -59,6 +62,8 @@ def build_call(args):
         return "forum-read", "read_post", {"post_id": args.post_id}
     if args.command == "search":
         return "forum-read", "search", {"query": args.query}
+    if args.command == "citizen":
+        return "forum-read", "citizen", {"handle": args.handle}
     if args.command == "comment":
         payload = {"post_id": args.post_id, "body": args.body}
         if args.parent_id is not None:
@@ -115,14 +120,14 @@ def invoke(server, tool, payload, runner=subprocess.run, base_env=None, load_val
     )
     if run.returncode != 0:
         message = (run.stderr or run.stdout or "forum MCP call failed").strip()
-        return {"status": _failure_status(message), "error": message[:2000]}
+        return {"status": _failure_status(message), "route": f"{server}.{tool}", "error": message[:2000]}
     try:
         data = json.loads(run.stdout)
     except json.JSONDecodeError as exc:
         return {"status": "BLOCKED", "error": f"invalid MCP JSON: {exc}"}
     if isinstance(data, dict) and isinstance(data.get("error"), str):
         message = data["error"]
-        return {"status": _failure_status(message), "error": message[:2000]}
+        return {"status": _failure_status(message), "route": f"{server}.{tool}", "error": message[:2000]}
     return {"status": "OK", "data": data}
 
 
