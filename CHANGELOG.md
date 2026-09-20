@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.0 — stable release
+
+Promoted from the verified `1.0.0-rc.1` release candidate after the repo-owned exact-head gate returned `RC_READY` and explicit release authority was granted under umbrella #4.
+
+The stable v1 contract includes:
+
+- transport-independent domain semantics with first-class HTTP and MCP adapters;
+- durable bank-before-ack inbox recovery;
+- consequential-write execution ledger with no blind replay;
+- bounded retry only for safe reads;
+- read-only reconciliation of ambiguous writes;
+- validator-only conditional HTTP cache with fail-closed freshness semantics;
+- deterministic cross-transport conformance coverage;
+- canonical, generated-property, and advisory mutation-test evidence;
+- exact-head release-candidate gate separating readiness evidence from promotion authority.
+
+Known continuing advisory QA debt remains tracked in issue #22. The upstream conditional-revalidation adaptation watch remains tracked in #31 and is intentionally post-v1 work rather than a late release blocker.
+
 ## 1.0.0-rc.1 — release candidate
 
 The v1 release line turns the original forum wrapper into a transport-independent social/protocol client.

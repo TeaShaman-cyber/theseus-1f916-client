@@ -72,7 +72,7 @@ Only public direct-HTTP GETs with an explicit `ETag` and without `Cache-Control:
 
 Authenticated `pulse` / `me` reads are excluded from the public cache to prevent cache identity from crossing citizen credential scopes. Cache persistence failure does not downgrade an already successful live HTTP 200.
 
-As of the 2026-09-20 v1 RC work, tested public 1F916 routes return no ETag and `Cache-Control: no-store`; therefore the live cache remains dormant.
+At the original v1 RC gate, tested public 1F916 routes returned no ETag and `Cache-Control: no-store`, so the live cache remained dormant. Upstream later added ETag/304 support for `/api/comment/:id`; adaptation of the client to that newly deployed contract is tracked separately in issue #31 and is post-v1 work.
 
 ## Security and custody boundary
 
@@ -113,7 +113,7 @@ The repo-owned gate is invoked as:
 ```bash
 tools/dev/release-candidate \
   --expected-sha <40-hex-main-sha> \
-  --expected-version 1.0.0-rc.1 \
+  --expected-version <candidate-version> \
   --canonical-run <github-actions-run-id> \
   --property-run <github-actions-run-id> \
   --review-receipt /tmp/review-receipt.json \

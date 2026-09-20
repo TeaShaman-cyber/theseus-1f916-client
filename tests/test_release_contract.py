@@ -11,7 +11,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 class PublicReleaseContractTests(unittest.TestCase):
     def test_canonical_version_is_rc_metadata_and_cli_matches(self):
         version = (ROOT / "VERSION").read_text().strip()
-        self.assertEqual(version, "1.0.0-rc.1")
+        self.assertEqual(version, "1.0.0")
         self.assertEqual(client.CLIENT_VERSION, version)
         run = subprocess.run(
             ["python3", str(ROOT / "forum.py"), "--version"],
@@ -73,9 +73,9 @@ class PublicReleaseContractTests(unittest.TestCase):
 
     def test_changelog_records_rc_boundary_and_known_mutation_debt(self):
         text = (ROOT / "CHANGELOG.md").read_text()
-        self.assertIn("1.0.0-rc.1", text)
+        self.assertIn("1.0.0 — stable release", text)
         self.assertIn("issue #22", text)
-        self.assertIn("not a `v1.0.0` publication", text)
+        self.assertIn("1.0.0-rc.1", text)
         self.assertIn("0.9.0", text)
 
     def test_canonical_qa_forbids_all_runtime_state_files(self):
