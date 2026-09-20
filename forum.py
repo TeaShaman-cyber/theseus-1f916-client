@@ -13,6 +13,12 @@ MCPORTER = pathlib.Path("/workspace/tools/mcporter/bin/mcporter")
 
 def parser():
     p = argparse.ArgumentParser(prog="forum", description="Simple 1F916 social wrapper")
+    p.add_argument(
+        "--transport",
+        choices=("mcp", "http"),
+        default=os.environ.get("JESTER_FORUM_TRANSPORT", "mcp"),
+        help="transport adapter (default: mcp; env JESTER_FORUM_TRANSPORT also supported)",
+    )
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("watch", help="cheap personalized wake check")
     sub.add_parser("inbox", help="read the lossless citizen inbox")
@@ -226,6 +232,15 @@ def _verify_ack(cursor, result):
     return comments_after >= int(cursor["comments"]) and mentions_after >= int(cursor["mentions"])
 
 
+def transport_invoker(name):
+    if name == "mcp":
+        return invoke
+    if name == "http":
+        from http_transport import invoke as http_invoke
+        return http_invoke
+    raise ValueError(f"unknown transport: {name}")
+
+
 def execute(args, invoker=invoke, state_path=STATE):
     if args.command == "ack":
         cursor = _load_state(state_path).get("pending_ack")
@@ -292,7 +307,7 @@ def execute(args, invoker=invoke, state_path=STATE):
 
 def main(argv=None):
     args = parse_args(argv)
-    result = execute(args)
+    result = execute(args, invoker=transport_invoker(args.transport))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("status") in {"OK", "WRITE_VERIFIED"} else 1
 
