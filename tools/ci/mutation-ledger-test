@@ -58,7 +58,10 @@ import json, os
 from pathlib import Path
 stats=json.loads(Path("mutants/mutmut-cicd-stats.json").read_text())
 incomplete_keys=("no_tests","suspicious","timeout","check_was_interrupted_by_user","segfault")
-if any(int(stats.get(key,0)) for key in incomplete_keys):
+terminal_keys=("killed","survived","no_tests","suspicious","timeout","segfault","skipped")
+total=int(stats.get("total",0))
+classified=sum(int(stats.get(key,0)) for key in terminal_keys)
+if any(int(stats.get(key,0)) for key in incomplete_keys) or classified != total:
     status="MUTATION_INCOMPLETE"
     code=2
 elif int(stats.get("survived",0)):
@@ -75,6 +78,8 @@ receipt={
     "profile":"ledger_reconciliation",
     "scope":{"only_mutate":"forum_ledger.py","tests":"tests/test_execution_ledger.py tests/test_reconciliation.py"},
     "mutmut_run_exit":int(os.environ.get("MUTMUT_RUN_EXIT","0")),
+    "classified_mutants":classified,
+    "unclassified_mutants":max(total-classified,0),
     "stats":stats,
 }
 Path(os.environ["RECEIPT"]).write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
