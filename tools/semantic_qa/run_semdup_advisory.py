@@ -149,6 +149,17 @@ def _degraded_receipt(
     }
 
 
+def _finding_count(payload: object) -> int:
+    if isinstance(payload, list):
+        return len(payload)
+    if isinstance(payload, dict):
+        for key in ("findings", "pairs", "results"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return len(value)
+    return 0
+
+
 def _run_diff(
     *,
     binary: Path,
@@ -396,6 +407,14 @@ def main() -> int:
             "db_cache": cache,
             "toolchain": toolchain,
             "timing_ms": {"cold_diff": cold_ms, "warm_diff": warm_ms},
+            "finding_count": {
+                "cold": _finding_count(cold),
+                "warm": _finding_count(warm),
+            },
+            "raw_json_sha256": {
+                "cold": _sha256(cold_path),
+                "warm": _sha256(warm_path),
+            },
             "cold_findings": cold,
             "warm_findings": warm,
             "cold_warm_results_identical": cold == warm,
