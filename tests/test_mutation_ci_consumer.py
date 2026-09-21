@@ -83,7 +83,7 @@ class MutationCiConsumerContractTest(unittest.TestCase):
         text = LEDGER_CONFIG.read_text()
         self.assertIn("only_mutate=forum_ledger.py", text)
         self.assertIn(
-            'pytest_add_cli_args_test_selection=["tests/test_execution_ledger.py", "tests/test_reconciliation.py"]',
+            "pytest_add_cli_args_test_selection=\n    tests/test_execution_ledger.py\n    tests/test_reconciliation.py",
             text,
         )
         self.assertIn("process_isolation=fork", text)
@@ -104,6 +104,7 @@ class MutationCiConsumerContractTest(unittest.TestCase):
         self.assertIn('"tests":"tests/test_execution_ledger.py tests/test_reconciliation.py"', text)
         self.assertIn('classified != total', text)
         self.assertIn('"unclassified_mutants":max(total-classified,0)', text)
+        self.assertIn('receipt["run_log_tail"]', text)
         self.assertIn("MUTATION_TEST_RECEIPT", text)
 
 

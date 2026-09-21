@@ -82,6 +82,10 @@ receipt={
     "unclassified_mutants":max(total-classified,0),
     "stats":stats,
 }
+if status == "MUTATION_INCOMPLETE":
+    log_path=Path("mutmut-run.log")
+    if log_path.exists():
+        receipt["run_log_tail"]=log_path.read_text(errors="replace")[-4000:]
 Path(os.environ["RECEIPT"]).write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
 print(f"MUTATION_TEST_STATUS {status}")
 print("MUTATION_TEST_STATS " + " ".join(f"{k}={stats.get(k,0)}" for k in ("total","killed","survived","no_tests","suspicious","timeout","segfault")))
