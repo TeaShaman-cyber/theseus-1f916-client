@@ -21,10 +21,11 @@ MCP is an adapter, not the identity of the client. Domain semantics are tested f
 `auto` is the default:
 
 - safe/idempotent reads are HTTP-primary;
-- an HTTP `RATE_LIMITED` safe read may retry the same HTTP route once under the bounded retry contract, then use one MCP fallback;
-- non-rate HTTP read failures fall back to MCP immediately;
+- non-rate HTTP read failures may use one MCP peer fallback while preserving ordered attempt provenance;
+- a `RATE_LIMITED` safe read under shared or unknown edge scope performs **no same-route retry** and **no automatic MCP fallback**; it returns the first rate-limit receipt with a recommended backoff of at least 60 seconds and honors a longer numeric `Retry-After`;
+- one peer attempt after a rate limit is an explicit opt-in only when current runtime evidence establishes an **independent rate-limit scope**;
 - consequential writes are never automatically replayed across transports and stay on one write route;
-- write verification/reconciliation may perform independent safe reads.
+- write verification/reconciliation may perform independent safe reads under the same current transport policy.
 
 Explicit `--transport http` and `--transport mcp` are exact-route diagnostic modes and do not automatically fall back to the peer transport.
 
