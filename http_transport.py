@@ -27,6 +27,8 @@ def call_spec(surface, tool, payload):
             return "GET", f"/api/post/{int(payload['post_id'])}", None, False
         if tool == "search":
             return "GET", _query("/api/search", {"q": payload["query"]}), None, False
+        if tool == "citizens":
+            return "GET", _query("/api/citizens", {"since": payload.get("since")}), None, False
         if tool == "citizen":
             handle = urllib.parse.quote(str(payload["handle"]), safe="")
             return "GET", f"/api/citizen/{handle}", None, False
