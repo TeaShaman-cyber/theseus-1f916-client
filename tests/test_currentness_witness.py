@@ -226,6 +226,21 @@ class CurrentnessWitnessTests(unittest.TestCase):
             {row["code"] for row in receipt["findings"]},
         )
 
+    def test_thread_continuation_contract_change_is_drift(self):
+        obs = observations(self.contract)
+        route = next(
+            row for row in obs["surface"]["routes"] if row["path"] == "/api/post/:id"
+        )
+        route["caps"] = {
+            "more": "while has_more, carry next_before from /api/new"
+        }
+        receipt = self.m.evaluate(self.contract, obs)
+        self.assertEqual(receipt["status"], "DRIFT_DETECTED")
+        self.assertIn(
+            "route_caps_drift",
+            {row["code"] for row in receipt["findings"]},
+        )
+
     def test_search_completeness_contract_change_is_drift(self):
         obs = observations(self.contract)
         route = next(
