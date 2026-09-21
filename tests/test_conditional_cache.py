@@ -87,6 +87,35 @@ class ConditionalCacheContractTests(unittest.TestCase):
             self.assertEqual(result["cache_status"], "MISS_ON_304")
             self.assertNotIn("data", result)
 
+    def test_cached_304_accepts_weak_strong_equivalent_response_validator(self):
+        with tempfile.TemporaryDirectory() as td:
+            cache = pathlib.Path(td) / "cache.json"
+            calls = 0
+
+            def requester(path, method="GET", payload=None, auth=False, headers=None):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    return FakeResponse(
+                        {"post": {"id": 6108, "title": "cached"}},
+                        headers={"ETag": 'W/"v1"'},
+                    )
+                self.assertEqual(headers, {"If-None-Match": 'W/"v1"'})
+                raise not_modified('"v1"')
+
+            first = http_transport.invoke(
+                "read", "read_post", {"post_id": 6108},
+                requester=requester, cache_path=cache,
+            )
+            second = http_transport.invoke(
+                "read", "read_post", {"post_id": 6108},
+                requester=requester, cache_path=cache,
+            )
+            self.assertEqual(first["status"], "OK")
+            self.assertEqual(second["status"], "OK")
+            self.assertEqual(second["cache_status"], "REVALIDATED")
+            self.assertEqual(second["data"], first["data"])
+
     def test_changed_etag_replaces_cached_body_and_validator(self):
         with tempfile.TemporaryDirectory() as td:
             cache = pathlib.Path(td) / "cache.json"
@@ -356,6 +385,49 @@ class CallerHeldRevalidationContractTests(unittest.TestCase):
             self.assertNotIn("data", result)
             self.assertEqual(seen, [{"If-None-Match": '"c1-v1"'}])
             self.assertFalse(cache.exists())
+
+    def test_explicit_304_accepts_strong_caller_and_weak_response_validator(self):
+        result = http_transport.invoke(
+            "read",
+            "read_comment",
+            {"comment_id": 71462},
+            requester=lambda *args, **kwargs: (_ for _ in ()).throw(
+                not_modified('W/"c1-v1"')
+            ),
+            cache_path=None,
+            if_none_match='"c1-v1"',
+        )
+        self.assertEqual(result["status"], "NOT_MODIFIED")
+        self.assertEqual(result["etag"], '"c1-v1"')
+
+    def test_explicit_304_accepts_weak_caller_and_strong_response_validator(self):
+        result = http_transport.invoke(
+            "read",
+            "read_comment",
+            {"comment_id": 71462},
+            requester=lambda *args, **kwargs: (_ for _ in ()).throw(
+                not_modified('"c1-v1"')
+            ),
+            cache_path=None,
+            if_none_match='W/"c1-v1"',
+        )
+        self.assertEqual(result["status"], "NOT_MODIFIED")
+        self.assertEqual(result["etag"], 'W/"c1-v1"')
+
+    def test_malformed_explicit_validator_fails_before_transport(self):
+        calls = []
+        for validator in ("c1-v1", 'W/c1-v1', '"a", "b"', "*", 'W/"bad space"'):
+            result = http_transport.invoke(
+                "read",
+                "read_comment",
+                {"comment_id": 71462},
+                requester=lambda *args, **kwargs: calls.append(args) or {},
+                cache_path=None,
+                if_none_match=validator,
+            )
+            self.assertEqual(result["status"], "BLOCKED", validator)
+            self.assertIn("ETag", result["error"])
+        self.assertEqual(calls, [])
 
     def test_explicit_caller_validator_200_returns_current_body_and_new_etag(self):
         seen = []
