@@ -83,6 +83,57 @@ class ExecutionLedgerContractTests(unittest.TestCase):
                     path, "op-1", "RECOVERABLE", now_ms=4_000
                 )
 
+    def test_transition_operation_persists_supplied_timestamp_and_bounded_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "operations.json"
+            forum_ledger.begin_operation(
+                path,
+                operation="comment",
+                intent={"post_id": 6108, "body": "hello"},
+                now_ms=1_000,
+                operation_id="op-1",
+            )
+            error = "E" * 2_500
+            transitioned = forum_ledger.transition_operation(
+                path,
+                "op-1",
+                "RECOVERABLE",
+                evidence={"transport_status": "RATE_LIMITED"},
+                error=error,
+                now_ms=2_500,
+            )
+            self.assertEqual(transitioned["updated_at_ms"], 2_500)
+            self.assertEqual(transitioned["error"], "E" * 2_000)
+            self.assertFalse(transitioned["auto_replay_allowed"])
+            self.assertEqual(
+                transitioned["evidence"], {"transport_status": "RATE_LIMITED"}
+            )
+
+            raw = json.loads(path.read_text())
+            self.assertEqual(raw["updated_at_ms"], 2_500)
+            persisted = raw["operations"][0]
+            self.assertEqual(persisted["updated_at_ms"], 2_500)
+            self.assertEqual(persisted["error"], "E" * 2_000)
+            self.assertNotIn("XXupdated_at_msXX", persisted)
+            self.assertNotIn("UPDATED_AT_MS", persisted)
+            self.assertNotIn("XXerrorXX", persisted)
+            self.assertNotIn("ERROR", persisted)
+
+    def test_transition_unknown_operation_fails_as_ledger_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "operations.json"
+            forum_ledger.begin_operation(
+                path,
+                operation="comment",
+                intent={"post_id": 6108, "body": "hello"},
+                now_ms=1_000,
+                operation_id="op-1",
+            )
+            with self.assertRaises(forum_ledger.LedgerError):
+                forum_ledger.transition_operation(
+                    path, "missing-op", "RECOVERABLE", now_ms=2_000
+                )
+
     def test_ledger_failure_before_write_prevents_external_mutation(self):
         with tempfile.TemporaryDirectory() as td:
             operations = pathlib.Path(td) / "operations.json"
