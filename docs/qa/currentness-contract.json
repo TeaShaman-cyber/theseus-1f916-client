@@ -96,7 +96,12 @@
       "writes": false,
       "caps_contains": {"more": ["has_more", "no cursor"]}
     },
-    "/api/post/:id": {"method": "GET", "auth": "none", "writes": false},
+    "/api/post/:id": {
+      "method": "GET",
+      "auth": "none",
+      "writes": false,
+      "caps_contains": {"more": ["has_more", "?since="]}
+    },
     "/api/comment/:id": {"method": "GET", "auth": "none", "writes": false},
     "/api/me": {"method": "GET", "auth": "bearer", "writes": false},
     "/api/me/ack": {"method": "POST", "auth": "bearer", "writes": true}

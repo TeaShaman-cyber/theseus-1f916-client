@@ -221,6 +221,274 @@ def _with_search_completeness(result):
     return normalized
 
 
+def _thread_cursor_key(value):
+    if not isinstance(value, str):
+        return None
+    created_at_raw, separator, comment_id_raw = value.partition(":")
+    if separator != ":" or not created_at_raw or not comment_id_raw:
+        return None
+    try:
+        created_at = int(created_at_raw)
+        comment_id = int(comment_id_raw)
+    except ValueError:
+        return None
+    if created_at < 0 or comment_id < 0:
+        return None
+    return created_at, comment_id
+
+
+def _thread_page_provenance(result, since):
+    receipt = {"since": since, "status": result.get("status")}
+    for key in ("route", "transport_policy", "retry_policy", "observer_scope", "attempts"):
+        if key in result:
+            receipt[key] = result[key]
+    return receipt
+
+
+def _thread_progress(post_id, pages_checked, comments_collected, expected_total, page_provenance, coverage_complete):
+    return {
+        "post_id": post_id,
+        "pages_checked": pages_checked,
+        "comments_collected": comments_collected,
+        "expected_total": expected_total,
+        "coverage_complete": coverage_complete,
+        "page_provenance": page_provenance,
+    }
+
+
+def _blocked_thread(post_id, message, pages_checked, comments, expected_total, page_provenance):
+    return {
+        "status": "BLOCKED",
+        "error": message,
+        "thread_progress": _thread_progress(
+            post_id,
+            pages_checked,
+            len(comments),
+            expected_total,
+            page_provenance,
+            False,
+        ),
+    }
+
+
+def _read_complete_thread(post_id, invoker):
+    since = None
+    prior_cursor_key = None
+    seen_cursors = set()
+    seen_comment_ids = set()
+    comments = []
+    page_provenance = []
+    pages_checked = 0
+    expected_total = None
+    first_result = None
+    first_data = None
+
+    while True:
+        payload = {"post_id": post_id}
+        if since is not None:
+            payload["since"] = since
+        page = invoker("read", "read_post", payload)
+        pages_checked += 1
+        page_provenance.append(_thread_page_provenance(page, since))
+
+        if page.get("status") != "OK":
+            failed = dict(page)
+            failed["thread_progress"] = _thread_progress(
+                post_id,
+                pages_checked,
+                len(comments),
+                expected_total,
+                page_provenance,
+                False,
+            )
+            return failed
+
+        data = page.get("data")
+        if not isinstance(data, dict):
+            return _blocked_thread(
+                post_id,
+                "thread page is not an object",
+                pages_checked,
+                comments,
+                expected_total,
+                page_provenance,
+            )
+
+        post = data.get("post")
+        if first_data is None:
+            if not isinstance(post, dict) or post.get("id") != post_id:
+                return _blocked_thread(
+                    post_id,
+                    "thread first page does not identify the requested post",
+                    pages_checked,
+                    comments,
+                    expected_total,
+                    page_provenance,
+                )
+            first_result = dict(page)
+            first_data = dict(data)
+        elif isinstance(post, dict) and post.get("id") != post_id:
+            return _blocked_thread(
+                post_id,
+                "thread page changed the requested post identity",
+                pages_checked,
+                comments,
+                expected_total,
+                page_provenance,
+            )
+
+        rows = data.get("comments")
+        returned = data.get("comments_returned")
+        total = data.get("comments_total")
+        has_more = data.get("has_more")
+        if not isinstance(rows, list):
+            return _blocked_thread(
+                post_id,
+                "thread page has no comments list",
+                pages_checked,
+                comments,
+                expected_total,
+                page_provenance,
+            )
+        if isinstance(returned, bool) or not isinstance(returned, int) or returned != len(rows):
+            return _blocked_thread(
+                post_id,
+                "thread comments_returned does not match page rows",
+                pages_checked,
+                comments,
+                expected_total,
+                page_provenance,
+            )
+        if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+            return _blocked_thread(
+                post_id,
+                "thread comments_total is not a non-negative integer",
+                pages_checked,
+                comments,
+                expected_total,
+                page_provenance,
+            )
+        if expected_total is None:
+            expected_total = total
+        elif total != expected_total:
+            return _blocked_thread(
+                post_id,
+                "thread comments_total changed during pagination; retry required",
+                pages_checked,
+                comments,
+                expected_total,
+                page_provenance,
+            )
+        if not isinstance(has_more, bool):
+            return _blocked_thread(
+                post_id,
+                "thread has_more is not boolean",
+                pages_checked,
+                comments,
+                expected_total,
+                page_provenance,
+            )
+
+        for row in rows:
+            if not isinstance(row, dict):
+                return _blocked_thread(
+                    post_id,
+                    "thread contains a non-object comment",
+                    pages_checked,
+                    comments,
+                    expected_total,
+                    page_provenance,
+                )
+            comment_id = row.get("id")
+            if isinstance(comment_id, bool) or not isinstance(comment_id, int):
+                return _blocked_thread(
+                    post_id,
+                    "thread contains a comment without an integer id",
+                    pages_checked,
+                    comments,
+                    expected_total,
+                    page_provenance,
+                )
+            if comment_id in seen_comment_ids:
+                return _blocked_thread(
+                    post_id,
+                    "thread pagination returned a duplicate comment id",
+                    pages_checked,
+                    comments,
+                    expected_total,
+                    page_provenance,
+                )
+            seen_comment_ids.add(comment_id)
+            comments.append(row)
+
+        if len(comments) > expected_total:
+            return _blocked_thread(
+                post_id,
+                "thread pagination exceeded comments_total",
+                pages_checked,
+                comments,
+                expected_total,
+                page_provenance,
+            )
+
+        if not has_more:
+            if len(comments) != expected_total:
+                return _blocked_thread(
+                    post_id,
+                    "thread ended without proving complete comment coverage",
+                    pages_checked,
+                    comments,
+                    expected_total,
+                    page_provenance,
+                )
+            final_data = dict(first_data)
+            final_data["comments"] = comments
+            final_data["comments_returned"] = len(comments)
+            final_data["comments_total"] = expected_total
+            final_data["has_more"] = False
+            final_data.pop("next_since", None)
+            final_data["thread_complete"] = True
+            completed = dict(first_result)
+            completed["data"] = final_data
+            completed["thread_progress"] = _thread_progress(
+                post_id,
+                pages_checked,
+                len(comments),
+                expected_total,
+                page_provenance,
+                True,
+            )
+            return completed
+
+        if not rows:
+            return _blocked_thread(
+                post_id,
+                "thread has_more page is empty",
+                pages_checked,
+                comments,
+                expected_total,
+                page_provenance,
+            )
+        next_since = data.get("next_since")
+        cursor_key = _thread_cursor_key(next_since)
+        if (
+            cursor_key is None
+            or next_since in seen_cursors
+            or (prior_cursor_key is not None and cursor_key <= prior_cursor_key)
+        ):
+            return _blocked_thread(
+                post_id,
+                "thread pagination stalled or returned an invalid cursor",
+                pages_checked,
+                comments,
+                expected_total,
+                page_provenance,
+            )
+        seen_cursors.add(next_since)
+        prior_cursor_key = cursor_key
+        since = next_since
+
+
 def _load_citizen_value():
     from client import credential
     return credential()
@@ -989,6 +1257,9 @@ def execute(
         result = dict(exact)
         result["identity_resolution"] = resolved["identity_resolution"]
         return result
+
+    if args.command == "thread":
+        return _read_complete_thread(args.post_id, invoker)
 
     if args.command == "ack":
         try:

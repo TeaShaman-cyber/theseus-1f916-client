@@ -212,7 +212,16 @@ class ForumExecutionTests(unittest.TestCase):
 
         def invoker(server, tool, payload, **kwargs):
             seen.update(server=server, tool=tool, payload=payload)
-            return {"status": "OK", "data": {"ok": True}}
+            return {
+                "status": "OK",
+                "data": {
+                    "post": {"id": 2129, "title": "Thread"},
+                    "comments": [],
+                    "comments_returned": 0,
+                    "comments_total": 0,
+                    "has_more": False,
+                },
+            }
 
         args = self.forum.parse_args(["thread", "2129"])
         result = self.forum.execute(args, invoker=invoker)
@@ -222,6 +231,186 @@ class ForumExecutionTests(unittest.TestCase):
             "payload": {"post_id": 2129},
         })
         self.assertEqual(result["status"], "OK")
+
+    def test_execute_thread_walks_next_since_to_complete_coverage(self):
+        calls = []
+        pages = {
+            None: {
+                "post": {"id": 2129, "title": "Thread"},
+                "comments": [
+                    {"id": 10, "created_at": 1000, "body": "a"},
+                    {"id": 11, "created_at": 1001, "body": "b"},
+                ],
+                "comments_returned": 2,
+                "comments_total": 3,
+                "has_more": True,
+                "next_since": "1001:11",
+            },
+            "1001:11": {
+                "post": {"id": 2129, "title": "Thread"},
+                "comments": [{"id": 12, "created_at": 1002, "body": "c"}],
+                "comments_returned": 1,
+                "comments_total": 3,
+                "has_more": False,
+            },
+        }
+
+        def invoker(server, tool, payload, **kwargs):
+            calls.append((server, tool, dict(payload)))
+            since = payload.get("since")
+            return {
+                "status": "OK",
+                "data": pages[since],
+                "attempts": [{"transport": "http", "status": "OK"}],
+            }
+
+        result = self.forum.execute(
+            self.forum.parse_args(["thread", "2129"]), invoker=invoker
+        )
+        self.assertEqual(
+            [payload for _, _, payload in calls],
+            [{"post_id": 2129}, {"post_id": 2129, "since": "1001:11"}],
+        )
+        self.assertEqual([row["id"] for row in result["data"]["comments"]], [10, 11, 12])
+        self.assertEqual(result["data"]["comments_returned"], 3)
+        self.assertEqual(result["data"]["comments_total"], 3)
+        self.assertTrue(result["data"]["thread_complete"])
+        self.assertEqual(result["thread_progress"]["pages_checked"], 2)
+        self.assertEqual(result["thread_progress"]["comments_collected"], 3)
+        self.assertTrue(result["thread_progress"]["coverage_complete"])
+        self.assertEqual(len(result["thread_progress"]["page_provenance"]), 2)
+
+    def test_execute_thread_fails_closed_on_invalid_continuation(self):
+        cases = [
+            ("missing", None, None),
+            ("malformed", "init", None),
+            ("repeated", "1001:11", "1001:11"),
+            ("non_advancing", "1001:11", "1000:9"),
+        ]
+        for name, first_cursor, second_cursor in cases:
+            with self.subTest(name=name):
+                calls = []
+
+                def invoker(server, tool, payload, **kwargs):
+                    calls.append(dict(payload))
+                    if len(calls) == 1:
+                        data = {
+                            "post": {"id": 2129},
+                            "comments": [{"id": 11}],
+                            "comments_returned": 1,
+                            "comments_total": 3,
+                            "has_more": True,
+                        }
+                        if first_cursor is not None:
+                            data["next_since"] = first_cursor
+                        return {"status": "OK", "data": data}
+                    return {
+                        "status": "OK",
+                        "data": {
+                            "post": {"id": 2129},
+                            "comments": [{"id": 12}],
+                            "comments_returned": 1,
+                            "comments_total": 3,
+                            "has_more": True,
+                            "next_since": second_cursor,
+                        },
+                    }
+
+                result = self.forum.execute(
+                    self.forum.parse_args(["thread", "2129"]), invoker=invoker
+                )
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertFalse(result["thread_progress"]["coverage_complete"])
+                self.assertIn("cursor", result["error"])
+
+    def test_execute_thread_rejects_duplicate_or_incomplete_coverage(self):
+        cases = [
+            (
+                "duplicate",
+                [{"id": 11}],
+                2,
+                "duplicate comment id",
+            ),
+            (
+                "incomplete",
+                [{"id": 12}],
+                3,
+                "complete comment coverage",
+            ),
+        ]
+        for name, second_rows, total, message in cases:
+            with self.subTest(name=name):
+                calls = []
+
+                def invoker(server, tool, payload, **kwargs):
+                    calls.append(dict(payload))
+                    if len(calls) == 1:
+                        return {
+                            "status": "OK",
+                            "data": {
+                                "post": {"id": 2129},
+                                "comments": [{"id": 11}],
+                                "comments_returned": 1,
+                                "comments_total": total,
+                                "has_more": True,
+                                "next_since": "1001:11",
+                            },
+                        }
+                    return {
+                        "status": "OK",
+                        "data": {
+                            "post": {"id": 2129},
+                            "comments": second_rows,
+                            "comments_returned": len(second_rows),
+                            "comments_total": total,
+                            "has_more": False,
+                        },
+                    }
+
+                result = self.forum.execute(
+                    self.forum.parse_args(["thread", "2129"]), invoker=invoker
+                )
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertIn(message, result["error"])
+                self.assertFalse(result["thread_progress"]["coverage_complete"])
+
+    def test_execute_thread_preserves_later_page_failure_and_progress(self):
+        calls = []
+
+        def invoker(server, tool, payload, **kwargs):
+            calls.append(dict(payload))
+            if len(calls) == 1:
+                return {
+                    "status": "OK",
+                    "data": {
+                        "post": {"id": 2129},
+                        "comments": [{"id": 11}],
+                        "comments_returned": 1,
+                        "comments_total": 2,
+                        "has_more": True,
+                        "next_since": "1001:11",
+                    },
+                    "attempts": [{"transport": "http", "status": "OK"}],
+                }
+            return {
+                "status": "RATE_LIMITED",
+                "error": "429",
+                "route": "http:GET /api/post/2129",
+                "attempts": [{"transport": "http", "status": "RATE_LIMITED"}],
+            }
+
+        result = self.forum.execute(
+            self.forum.parse_args(["thread", "2129"]), invoker=invoker
+        )
+        self.assertEqual(result["status"], "RATE_LIMITED")
+        self.assertEqual(result["error"], "429")
+        self.assertEqual(result["thread_progress"]["pages_checked"], 2)
+        self.assertEqual(result["thread_progress"]["comments_collected"], 1)
+        self.assertFalse(result["thread_progress"]["coverage_complete"])
+        self.assertEqual(
+            [row["status"] for row in result["thread_progress"]["page_provenance"]],
+            ["OK", "RATE_LIMITED"],
+        )
 
     def test_execute_search_surfaces_transport_independent_completeness(self):
         cases = [

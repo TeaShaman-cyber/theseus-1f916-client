@@ -308,6 +308,7 @@ class HttpTransportContractTests(unittest.TestCase):
             (("citizen", "vote", {"target_type": "post", "target_id": 1}), ("POST", "/api/vote", {"target_type": "post", "target_id": 1}, True)),
             (("read", "front_page", {"order": "new", "limit": 25}), ("GET", "/api/front?order=new&limit=25", None, False)),
             (("read", "read_post", {"post_id": 6108}), ("GET", "/api/post/6108", None, False)),
+            (("read", "read_post", {"post_id": 6108, "since": "1790010000000:42"}), ("GET", "/api/post/6108?since=1790010000000%3A42", None, False)),
             (("read", "search", {"query": "client state"}), ("GET", "/api/search?q=client+state", None, False)),
             (("read", "citizen", {"handle": "jester-sonar"}), ("GET", "/api/citizen/jester-sonar", None, False)),
             (("read", "read_comment", {"comment_id": 71155}), ("GET", "/api/comment/71155", None, False)),
