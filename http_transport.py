@@ -289,6 +289,13 @@ def invoke(surface, tool, payload, requester=None, cache_path=CACHE, if_none_mat
     except Exception as exc:
         return {"status": "BLOCKED", "route": route, "error": str(exc)[:2000]}
 
+    if not isinstance(data, dict):
+        return {
+            "status": "BLOCKED",
+            "route": route,
+            "error": "HTTP response root must be a JSON object",
+        }
+
     if isinstance(data, dict) and isinstance(data.get("error"), str):
         return {"status": "BLOCKED", "route": route, "error": data["error"][:2000]}
 

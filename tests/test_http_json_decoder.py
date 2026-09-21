@@ -51,6 +51,42 @@ class HttpJsonDecoderTests(unittest.TestCase):
                 lambda: client.request_with_meta("/api/test"),
             )
 
+    def test_transport_rejects_non_object_json_roots_from_raw_bytes(self):
+        cases = (
+            (b'[]', 'list'),
+            (b'null', 'null'),
+            (b'"oops"', 'string'),
+        )
+        for raw, label in cases:
+            with self.subTest(label=label):
+                result = self._with_raw(
+                    raw,
+                    lambda: http_transport.invoke(
+                        "read",
+                        "search",
+                        {"query": "specimen"},
+                        cache_path=None,
+                    ),
+                )
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertEqual(result["route"], "http:GET /api/search")
+                self.assertIn("JSON object", result["error"])
+                self.assertNotIn("data", result)
+
+    def test_transport_keeps_valid_object_root_ok(self):
+        result = self._with_raw(
+            b'{"results":[],"has_more":false}',
+            lambda: http_transport.invoke(
+                "read",
+                "search",
+                {"query": "specimen"},
+                cache_path=None,
+            ),
+        )
+        self.assertEqual(result["status"], "OK")
+        self.assertEqual(result["data"]["results"], [])
+        self.assertFalse(result["data"]["has_more"])
+
     def test_transport_reports_duplicate_key_as_blocked_not_empty_success(self):
         result = self._with_raw(
             b'{"since_last_visit":{"comments":[1]},"since_last_visit":{"comments":[]}}',
