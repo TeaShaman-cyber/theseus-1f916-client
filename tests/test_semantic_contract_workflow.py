@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/semantic-contract-advisory.yml"
+PREP = ROOT / "tools/semantic_qa/prepare_rank_toolchain.py"
 
 
 class SemanticContractWorkflowTests(unittest.TestCase):
@@ -28,6 +29,21 @@ class SemanticContractWorkflowTests(unittest.TestCase):
     def test_workflow_binds_exact_pr_head_and_python_312(self):
         self.assertIn("github.event.pull_request.head.sha || github.sha", self.text)
         self.assertIn('python-version: "3.12"', self.text)
+
+    def test_workflow_pins_merged_cookbook_mechanics(self):
+        self.assertIn(
+            "TeaShaman-cyber/marcopolo-cookbook/"
+            ".github/actions/semantic-advisory-mechanics@"
+            "01af605cd35e60cb55724e1abfcff7331bbfda3e",
+            self.text,
+        )
+        self.assertIn("steps.mechanics.outputs.receipt-path", self.text)
+        self.assertIn("steps.mechanics.outputs.runtime-dir", self.text)
+
+    def test_client_prep_no_longer_owns_generic_artifact_transport(self):
+        prep = PREP.read_text()
+        for token in ("gh", "urllib", "tarfile", "zipfile", "package_freshness"):
+            self.assertNotIn(token, prep)
 
 
 if __name__ == "__main__":

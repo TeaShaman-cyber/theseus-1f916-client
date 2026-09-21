@@ -35,12 +35,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Prepare bounded trace input
+      - name: Resolve semantic identity
+        id: identity
         shell: bash
         run: |
           set -euo pipefail
-          profile=tools/semantic_qa/profile.json
-          out="$RUNNER_TEMP/semantic-input"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
             head="${{ github.event.pull_request.head.sha }}"
@@ -50,24 +49,38 @@ jobs:
             head="$(git rev-parse HEAD)"
             task="manual-${{ github.run_id }}"
           fi
-          python3 tools/semantic_qa/trace_input.py             --base "$base"             --head "$head"             --output "$out"             --repository "${{ github.repository }}"             --task-id "$task"             --max-files "$(jq -r '.input_budget.max_files' "$profile")"             --max-total-bytes "$(jq -r '.input_budget.max_total_bytes' "$profile")"             --max-file-bytes "$(jq -r '.input_budget.max_file_bytes' "$profile")"
+          {
+            echo "base=$base"
+            echo "head=$head"
+            echo "task=$task"
+          } >> "$GITHUB_OUTPUT"
           {
             echo "SEMANTIC_BASE=$base"
             echo "SEMANTIC_HEAD=$head"
             echo "SEMANTIC_TASK=$task"
           } >> "$GITHUB_ENV"
 
-      - name: Run packaged contract advisory
+      - name: Prepare shared semantic mechanics
+        id: mechanics
+        uses: TeaShaman-cyber/marcopolo-cookbook/.github/actions/semantic-advisory-mechanics@01af605cd35e60cb55724e1abfcff7331bbfda3e
+        with:
+          profile-file: tools/semantic_qa/profile.json
+          tool: ${{ matrix.tool }}
+          base-sha: ${{ steps.identity.outputs.base }}
+          candidate-sha: ${{ steps.identity.outputs.head }}
+          repository: ${{ github.repository }}
+          task-id: ${{ steps.identity.outputs.task }}
+          output-root: ${{ runner.temp }}/semantic-mechanics-${{ matrix.tool }}
+          runtime-dir: ${{ runner.temp }}/${{ matrix.tool }}-runtime
+
+      - name: Run local contract advisory
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
           tool="${{ matrix.tool }}"
           out="$RUNNER_TEMP/semantic-$tool"
-          input="$RUNNER_TEMP/semantic-input"
           mkdir -p "$out"
-          python3 tools/semantic_qa/run_contract_advisory.py             --tool "$tool"             --repository "${{ github.repository }}"             --task-id "$SEMANTIC_TASK"             --base-sha "$SEMANTIC_BASE"             --candidate-sha "$SEMANTIC_HEAD"             --profile tools/semantic_qa/profile.json             --input-manifest "$input/input-manifest.json"             --input-root "$input"             --corpus-dir docs/qa/semantic-contract-corpus             --output-dir "$out"             --download-dir "$RUNNER_TEMP/$tool-package-download"             --runtime-dir "$RUNNER_TEMP/$tool-runtime"             --env-dir "$RUNNER_TEMP/$tool-env"
+          python3 tools/semantic_qa/run_contract_advisory.py             --tool "$tool"             --repository "${{ github.repository }}"             --task-id "$SEMANTIC_TASK"             --base-sha "$SEMANTIC_BASE"             --candidate-sha "$SEMANTIC_HEAD"             --profile tools/semantic_qa/profile.json             --mechanics-receipt "${{ steps.mechanics.outputs.receipt-path }}"             --input-manifest "${{ steps.mechanics.outputs.input-manifest }}"             --input-root "${{ steps.mechanics.outputs.input-root }}"             --corpus-dir docs/qa/semantic-contract-corpus             --output-dir "$out"             --runtime-dir "${{ steps.mechanics.outputs.runtime-dir }}"             --env-dir "$RUNNER_TEMP/$tool-env"
           rc=$?
           if [ "$rc" -ne 0 ] || [ ! -f "$out/receipt.json" ]; then
             echo '{"schema_version":1,"status":"UNAVAILABLE","reason":"orchestration_failed","acceptance_authority":false}' > "$out/receipt.json"
@@ -85,7 +98,7 @@ jobs:
             echo
             echo "- status: `$status`"
             echo "- package freshness: `$freshness`"
-            echo "- package setup ms: `$setup_ms`"
+            echo "- local setup ms: `$setup_ms`"
             echo "- cold retrieval ms: `$cold_ms`"
             echo "- warm retrieval ms: `$warm_ms`"
             echo "- candidate: `$SEMANTIC_HEAD`"
@@ -98,7 +111,7 @@ jobs:
         with:
           name: semantic-${{ matrix.tool }}-${{ env.SEMANTIC_TASK }}-${{ env.SEMANTIC_HEAD }}
           path: |
-            ${{ runner.temp }}/semantic-input
+            ${{ runner.temp }}/semantic-mechanics-${{ matrix.tool }}
             ${{ runner.temp }}/semantic-${{ matrix.tool }}
           if-no-files-found: warn
           retention-days: 90
