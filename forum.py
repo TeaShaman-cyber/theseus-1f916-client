@@ -250,8 +250,9 @@ def _verify_ack(cursor, result):
 
 
 SAFE_AUTO_CITIZEN_READS = {"pulse", "me"}
-SAFE_READ_RETRY_DEFAULT_SECONDS = 1.0
-SAFE_READ_RETRY_MAX_SECONDS = 2.0
+RATE_LIMIT_SCOPE_SHARED_OR_UNKNOWN = "shared_or_unknown_edge"
+RATE_LIMIT_SCOPE_INDEPENDENT_PEER = "independent_peer"
+RATE_LIMIT_BACKOFF_DEFAULT_SECONDS = 60.0
 
 
 def _is_safe_auto_read(surface, tool):
@@ -287,19 +288,15 @@ def _with_read_attempts(result, attempts):
     return wrapped
 
 
-def _safe_read_retry_delay(result):
+def _rate_limit_backoff_seconds(result):
     raw = result.get("retry_after_seconds")
-    if raw is None:
-        return SAFE_READ_RETRY_DEFAULT_SECONDS, None
     try:
         delay = float(raw)
     except (TypeError, ValueError):
-        return SAFE_READ_RETRY_DEFAULT_SECONDS, None
+        delay = RATE_LIMIT_BACKOFF_DEFAULT_SECONDS
     if delay < 0:
-        return SAFE_READ_RETRY_DEFAULT_SECONDS, None
-    if delay > SAFE_READ_RETRY_MAX_SECONDS:
-        return None, "retry_after_exceeds_bound"
-    return delay, None
+        delay = RATE_LIMIT_BACKOFF_DEFAULT_SECONDS
+    return max(RATE_LIMIT_BACKOFF_DEFAULT_SECONDS, delay)
 
 
 def auto_invoke(
@@ -309,10 +306,17 @@ def auto_invoke(
     http_invoker=None,
     mcp_invoker=None,
     sleep_fn=time.sleep,
+    rate_limit_scope=RATE_LIMIT_SCOPE_SHARED_OR_UNKNOWN,
 ):
     mcp_call = invoke if mcp_invoker is None else mcp_invoker
     if not _is_safe_auto_read(surface, tool):
         return mcp_call(surface, tool, payload)
+
+    if rate_limit_scope not in {
+        RATE_LIMIT_SCOPE_SHARED_OR_UNKNOWN,
+        RATE_LIMIT_SCOPE_INDEPENDENT_PEER,
+    }:
+        raise ValueError(f"unsupported rate_limit_scope: {rate_limit_scope}")
 
     if http_invoker is None:
         from http_transport import invoke as http_call
@@ -321,29 +325,33 @@ def auto_invoke(
 
     primary = http_call(surface, tool, payload)
     attempts = [_attempt_record("http", surface, tool, primary)]
-    retry_skipped = None
     if primary.get("status") == "OK":
         wrapped = _with_read_attempts(primary, attempts)
-        wrapped["retry_policy"] = "http-rate-limited-once"
+        wrapped["retry_policy"] = "peer-fallback-on-non-rate-limit"
         return wrapped
 
     if primary.get("status") == "RATE_LIMITED":
-        delay, retry_skipped = _safe_read_retry_delay(primary)
-        if delay is not None:
-            sleep_fn(delay)
-            retry = http_call(surface, tool, payload)
-            attempts.append(_attempt_record("http", surface, tool, retry))
-            if retry.get("status") == "OK":
-                wrapped = _with_read_attempts(retry, attempts)
-                wrapped["retry_policy"] = "http-rate-limited-once"
-                return wrapped
+        backoff = _rate_limit_backoff_seconds(primary)
+        if rate_limit_scope != RATE_LIMIT_SCOPE_INDEPENDENT_PEER:
+            wrapped = _with_read_attempts(primary, attempts)
+            wrapped["retry_policy"] = "rate-limit-backoff-no-peer"
+            wrapped["observer_scope"] = rate_limit_scope
+            wrapped["recommended_backoff_seconds"] = backoff
+            wrapped["peer_fallback_skipped"] = "shared_or_unknown_edge_scope"
+            return wrapped
+
+        fallback = mcp_call(surface, tool, payload)
+        attempts.append(_attempt_record("mcp", surface, tool, fallback))
+        wrapped = _with_read_attempts(fallback, attempts)
+        wrapped["retry_policy"] = "independent-peer-on-rate-limit"
+        wrapped["observer_scope"] = rate_limit_scope
+        wrapped["primary_recommended_backoff_seconds"] = backoff
+        return wrapped
 
     fallback = mcp_call(surface, tool, payload)
     attempts.append(_attempt_record("mcp", surface, tool, fallback))
     wrapped = _with_read_attempts(fallback, attempts)
-    wrapped["retry_policy"] = "http-rate-limited-once"
-    if retry_skipped is not None:
-        wrapped["retry_skipped"] = retry_skipped
+    wrapped["retry_policy"] = "peer-fallback-on-non-rate-limit"
     return wrapped
 
 

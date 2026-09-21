@@ -68,6 +68,24 @@ The persistent cache remains validator-only and still obeys `Cache-Control: no-s
 
 Deleting `.forum-cache.json` must never affect `.forum-state.json` or `.forum-operations.json`. It also must never affect the separate `.forum-liveness.json` receipt.
 
+Automatic safe reads are HTTP-primary. For ordinary non-rate-limit transport failures,
+the client may use one MCP peer fallback and preserves both attempt receipts. A 429
+RATE_LIMITED is different: live 1F916 currently applies one Cloudflare edge budget to
+both /api/* and /mcp*, counted per IP address and Cloudflare location, and refused
+requests still count. Therefore the default auto policy treats the peer rate-limit
+scope as shared or unknown edge scope: it performs no same-route retry, performs no
+automatic MCP fallback, and returns the first RATE_LIMITED receipt with
+recommended_backoff_seconds. The client never sleeps for that backoff inside the
+command; the caller or scheduler decides when to try again. The current server guidance
+after an edge 429 is approximately one minute of silence, so the recommendation is at
+least 60 seconds and honors a longer numeric Retry-After when present.
+
+A caller that has independent runtime evidence that the peer transport uses an
+independent rate-limit scope may opt into one peer attempt programmatically; historical
+success of a peer fallback is not itself permanent permission to do so. A route 429 is
+still not proof of a forum-wide outage. Consequential writes remain single-transport
+and are never automatically replayed.
+
 Explicit adapter selection remains available for diagnostics and exact-route tests:
 
 ```bash
