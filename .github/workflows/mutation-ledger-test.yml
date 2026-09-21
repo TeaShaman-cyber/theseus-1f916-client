@@ -1,0 +1,24 @@
+name: Mutation test — ledger/reconciliation
+
+on:
+  pull_request:
+    paths:
+      - forum_ledger.py
+      - tests/test_execution_ledger.py
+      - tests/test_reconciliation.py
+      - tools/ci/mutation-ledger-test
+      - tools/ci/mutation-ledger.cfg
+      - requirements/ci-mutation.txt
+      - .github/workflows/mutation-ledger-test.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation-ledger-test:
+    uses: TeaShaman-cyber/marcopolo-cookbook/.github/workflows/reusable-mutation-test.yml@0fa76f7aa1ccad2fb175591c9497157d8c60e481
+    with:
+      python_version: "3.11"
+      requirements_file: requirements/ci-mutation.txt
+      mutation_endpoint: tools/ci/mutation-ledger-test

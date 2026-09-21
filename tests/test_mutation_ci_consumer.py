@@ -8,6 +8,9 @@ WORKFLOW = ROOT / ".github" / "workflows" / "mutation-test.yml"
 LOCK = ROOT / "requirements" / "ci-mutation.txt"
 ENDPOINT = ROOT / "tools" / "ci" / "mutation-test"
 CONFIG = ROOT / "setup.cfg"
+LEDGER_WORKFLOW = ROOT / ".github" / "workflows" / "mutation-ledger-test.yml"
+LEDGER_ENDPOINT = ROOT / "tools" / "ci" / "mutation-ledger-test"
+LEDGER_CONFIG = ROOT / "tools" / "ci" / "mutation-ledger.cfg"
 PROFILE_SHA = "0fa76f7aa1ccad2fb175591c9497157d8c60e481"
 
 
@@ -59,6 +62,50 @@ class MutationCiConsumerContractTest(unittest.TestCase):
             self.assertIn(status, text)
         self.assertIn("MUTATION_TEST_RECEIPT", text)
         self.assertIn("RUNNER_TEMP", text)
+
+    def test_ledger_caller_pins_same_profile_and_is_read_only_and_bounded(self):
+        text = LEDGER_WORKFLOW.read_text()
+        expected = (
+            "uses: TeaShaman-cyber/marcopolo-cookbook/.github/workflows/"
+            f"reusable-mutation-test.yml@{PROFILE_SHA}"
+        )
+        self.assertIn(expected, text)
+        self.assertIn("permissions:\n  contents: read", text)
+        self.assertIn("- forum_ledger.py", text)
+        self.assertIn("- tests/test_execution_ledger.py", text)
+        self.assertIn("- tests/test_reconciliation.py", text)
+        self.assertIn("mutation_endpoint: tools/ci/mutation-ledger-test", text)
+        self.assertNotIn("push:", text)
+        self.assertNotIn("continue-on-error", text)
+        self.assertNotIn("secrets:", text)
+
+    def test_ledger_mutmut_config_targets_ledger_and_reconciliation_tests_only(self):
+        text = LEDGER_CONFIG.read_text()
+        self.assertIn("only_mutate=forum_ledger.py", text)
+        self.assertIn(
+            "pytest_add_cli_args_test_selection=\n    tests/test_execution_ledger.py\n    tests/test_reconciliation.py",
+            text,
+        )
+        self.assertIn("process_isolation=fork", text)
+        self.assertNotIn("forum_state.py", text)
+        self.assertNotIn("property_tests", text)
+        self.assertNotIn("hypothesis", text.lower())
+
+    def test_ledger_endpoint_uses_ephemeral_profile_and_exported_stats(self):
+        result = subprocess.run(
+            ["sh", "-n", str(LEDGER_ENDPOINT)], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = LEDGER_ENDPOINT.read_text()
+        self.assertIn('cp "$ROOT/tools/ci/mutation-ledger.cfg" "$WORK_DIR/setup.cfg"', text)
+        self.assertIn("mutmut export-cicd-stats", text)
+        self.assertIn('"profile":"ledger_reconciliation"', text)
+        self.assertIn('"only_mutate":"forum_ledger.py"', text)
+        self.assertIn('"tests":"tests/test_execution_ledger.py tests/test_reconciliation.py"', text)
+        self.assertIn('classified != total', text)
+        self.assertIn('"unclassified_mutants":max(total-classified,0)', text)
+        self.assertIn('receipt["run_log_tail"]', text)
+        self.assertIn("MUTATION_TEST_RECEIPT", text)
 
 
 if __name__ == "__main__":
