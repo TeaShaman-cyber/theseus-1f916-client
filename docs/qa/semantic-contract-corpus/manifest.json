@@ -9,57 +9,57 @@
       "start_line": 17
     },
     {
-      "end_line": 27,
+      "end_line": 28,
       "invariant_id": "write-route-no-auto-replay",
       "record": "record-02.md",
-      "sha256": "adba96b1ecd7a901dd088f27a68b76492b18c022512541825b512cb87fba5e62",
-      "start_line": 26
+      "sha256": "fc480bb84a158227e219049697b2df83fce0c2d4139065ddca032bc4b8dbf5d5",
+      "start_line": 27
     },
     {
-      "end_line": 42,
+      "end_line": 43,
       "invariant_id": "status-and-route-provenance",
       "record": "record-03.md",
       "sha256": "975160b46bdbde01e7e07948e88051fce787b262ca826fd8baf83e76c082119a",
-      "start_line": 37
+      "start_line": 38
     },
     {
-      "end_line": 48,
+      "end_line": 49,
       "invariant_id": "durable-inbox-exact-cursor",
       "record": "record-04.md",
       "sha256": "ae7917f005a2b92f2d233c1b47517215ad42a4c593474be394e3add39c2729e3",
-      "start_line": 46
+      "start_line": 47
     },
     {
-      "end_line": 65,
+      "end_line": 66,
       "invariant_id": "reconciliation-no-blind-replay",
       "record": "record-05.md",
       "sha256": "f127891da62a735c2df3e6587938032db7d2c439be932c87f61884643a6894dd",
-      "start_line": 56
+      "start_line": 57
     },
     {
-      "end_line": 73,
+      "end_line": 74,
       "invariant_id": "cache-is-not-authority",
       "record": "record-06.md",
       "sha256": "5dce45c3af3fdc678bcb224ce842459aa9739053e3d32e9bc4275fa368e4ce65",
-      "start_line": 69
+      "start_line": 70
     },
     {
-      "end_line": 83,
+      "end_line": 84,
       "invariant_id": "credential-custody-boundary",
       "record": "record-07.md",
       "sha256": "600fd8e4599ee1914e8350ab7010f0b0048070ec5473faa5166ae399d93edc2e",
-      "start_line": 79
+      "start_line": 80
     },
     {
-      "end_line": 109,
+      "end_line": 110,
       "invariant_id": "promotion-authority-boundary",
       "record": "record-08.md",
       "sha256": "fc5fd41ace3298f29aff54de56f2e8e623dbecb7c5002596262502e95c5cccd0",
-      "start_line": 109
+      "start_line": 110
     }
   ],
   "schema_version": 1,
-  "source_git_blob": "834915f5279ee3fd49ced069e93fa3c5fa4fca25",
+  "source_git_blob": "5427247e1cab0364a3aaa005991712eba33288c5",
   "source_path": "docs/v1-contract.md",
-  "source_sha256": "3f8d1b0ad5ae82018cbbd4a72aff2d1231762fbdc176f5ea10e055ee99801ce1"
+  "source_sha256": "3e8eb084f267e28cdd8f25326f6d416059ebcfc613591996f4111866f16e73df"
 }
