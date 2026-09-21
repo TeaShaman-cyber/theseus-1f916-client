@@ -134,6 +134,85 @@ class ExecutionLedgerContractTests(unittest.TestCase):
                     path, "missing-op", "RECOVERABLE", now_ms=2_000
                 )
 
+    def test_record_reconciliation_persists_exact_history_contract_and_retains_last_twenty(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "operations.json"
+            forum_ledger.begin_operation(
+                path,
+                operation="ack",
+                intent={"up_to": {"version": 1}},
+                now_ms=1_000,
+                operation_id="op-1",
+            )
+
+            for index in range(21):
+                delivery = ("unknown", "contradiction", "recovered_match")[index % 3]
+                record = forum_ledger.record_reconciliation(
+                    path,
+                    "op-1",
+                    delivery,
+                    evidence={"index": index, "nested": {"value": index}},
+                    error="E" * 2_500 if index == 20 else None,
+                    now_ms=2_000 + index,
+                )
+
+            self.assertIsNotNone(record)
+            self.assertEqual(record["state"], "ATTEMPTED")
+            self.assertFalse(record["auto_replay_allowed"])
+            self.assertEqual(record["updated_at_ms"], 2_020)
+            history = record["evidence"]["reconciliation_history"]
+            self.assertEqual(len(history), 20)
+            self.assertEqual([entry["evidence"]["index"] for entry in history], list(range(1, 21)))
+            last = history[-1]
+            self.assertEqual(last["at_ms"], 2_020)
+            self.assertEqual(last["delivery_state"], "recovered_match")
+            self.assertEqual(last["evidence"], {"index": 20, "nested": {"value": 20}})
+            self.assertEqual(last["error"], "E" * 2_000)
+
+            raw = json.loads(path.read_text())
+            self.assertEqual(raw["updated_at_ms"], 2_020)
+            persisted = raw["operations"][0]
+            self.assertEqual(persisted, record)
+            self.assertNotIn("XXupdated_at_msXX", persisted)
+            self.assertNotIn("UPDATED_AT_MS", persisted)
+            self.assertNotIn("XXauto_replay_allowedXX", persisted)
+            self.assertNotIn("AUTO_REPLAY_ALLOWED", persisted)
+            self.assertNotIn("XXat_msXX", last)
+            self.assertNotIn("AT_MS", last)
+            self.assertNotIn("XXerrorXX", last)
+            self.assertNotIn("ERROR", last)
+
+    def test_record_reconciliation_unknown_operation_fails_as_ledger_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "operations.json"
+            forum_ledger.begin_operation(
+                path,
+                operation="comment",
+                intent={"post_id": 6108, "body": "hello"},
+                now_ms=1_000,
+                operation_id="op-1",
+            )
+            with self.assertRaises(forum_ledger.LedgerError):
+                forum_ledger.record_reconciliation(
+                    path, "missing-op", "unknown", now_ms=2_000
+                )
+
+    def test_record_reconciliation_terminal_operation_fails_as_ledger_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "operations.json"
+            forum_ledger.record_blocked(
+                path,
+                operation="vote",
+                intent={"kind": "comment", "id": 71462},
+                error="precondition",
+                now_ms=1_000,
+                operation_id="op-terminal",
+            )
+            with self.assertRaises(forum_ledger.LedgerError):
+                forum_ledger.record_reconciliation(
+                    path, "op-terminal", "unknown", now_ms=2_000
+                )
+
     def test_ledger_failure_before_write_prevents_external_mutation(self):
         with tempfile.TemporaryDirectory() as td:
             operations = pathlib.Path(td) / "operations.json"
