@@ -85,6 +85,7 @@ class PublicReleaseContractTests(unittest.TestCase):
             ".forum-state.json",
             ".forum-operations.json",
             ".forum-cache.json",
+            ".forum-liveness.json",
         ):
             self.assertIn(name, text)
 

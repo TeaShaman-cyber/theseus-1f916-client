@@ -5,7 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$ROOT"
 
 printf '%s\n' '== secret/runtime boundary =='
-for forbidden in citizen.json .forum-state.json .forum-operations.json .forum-cache.json; do
+for forbidden in citizen.json .forum-state.json .forum-operations.json .forum-cache.json .forum-liveness.json; do
   if git ls-files --error-unmatch "$forbidden" >/dev/null 2>&1; then
     printf 'QA_SECRET_BOUNDARY_ERROR: tracked=%s\n' "$forbidden" >&2
     exit 2
@@ -18,7 +18,7 @@ if git ls-files | grep -Eq '(^|/)(__pycache__/|.*_receipt\.json$|.*_readback\.js
 fi
 
 printf '%s\n' '== python syntax =='
-python3 -m compileall -q forum.py client.py tests
+python3 -m compileall -q forum.py client.py forum_liveness.py tests
 python3 -m py_compile tools/dev/release_candidate.py tools/semantic_qa/*.py
 
 printf '%s\n' '== unit tests =='
