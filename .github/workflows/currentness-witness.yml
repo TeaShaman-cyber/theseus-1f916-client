@@ -1,0 +1,54 @@
+name: External currentness witness
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-currentness-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  currentness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+
+      - name: Record verification identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'verification_source_sha=%s\n' "$(git rev-parse HEAD)"
+          printf 'verification_run_id=%s\n' "${GITHUB_RUN_ID}"
+          printf 'verification_run_attempt=%s\n' "${GITHUB_RUN_ATTEMPT}"
+
+      - name: Run read-only currentness witness
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          bash tools/dev/currentness-check --output currentness-receipt.json >currentness.stdout 2>currentness.stderr
+          rc=$?
+          set -e
+          cat currentness.stdout
+          cat currentness.stderr >&2
+          if [ -f currentness-receipt.json ]; then
+            echo '## External currentness receipt' >>"$GITHUB_STEP_SUMMARY"
+            echo >>"$GITHUB_STEP_SUMMARY"
+            cat currentness-receipt.json >>"$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"

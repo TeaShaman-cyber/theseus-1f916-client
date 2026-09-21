@@ -86,6 +86,30 @@ REVIEW_REQUIRED
 
 `UNAVAILABLE` is not PASS. It is also not automatically a product failure; the affected currentness claim remains unknown/degraded until a valid source is available.
 
+### Repository currentness witness
+
+For API/MCP/platform-sensitive work, run the repository-owned read-only witness:
+
+```bash
+python3 tools/dev/currentness.py
+```
+
+This command is deliberately **not** part of `tools/dev/check`. It performs live network reads against the current 1F916 surface and the official MCP specification pointer, so provider/network availability must not make the canonical deterministic gate flaky.
+
+The checked contract lives in `docs/qa/currentness-contract.json` and is intentionally narrow: it tracks only MCP endpoints, selected tool schemas, API routes, deployment identity, and rate-limit scope that the wrapper actually depends on. Total route/tool counts are observations, not brittle acceptance assertions.
+
+Use it when a change touches API/MCP assumptions, before release, or when forum behavior looks inconsistent with local tests. The receipt binds the observation to the exact client source SHA when Git metadata is available and carries `acceptance_authority=false`.
+
+Exit status:
+
+```text
+0 -> CURRENT
+1 -> DRIFT_DETECTED
+2 -> UNAVAILABLE or REVIEW_REQUIRED
+```
+
+A newer upstream MCP release than the forum's negotiated protocol is advisory by itself; it becomes review-worthy only when the live negotiated protocol or a relied-on schema actually changes.
+
 ### Maintainer escalation
 
 Use maintainer contact only for a material **server-owned** ambiguity or a missing server capability that current docs/source/live observations do not settle.
