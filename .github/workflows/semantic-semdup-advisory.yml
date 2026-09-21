@@ -76,8 +76,7 @@ jobs:
           mkdir -p "$out"
           python3 tools/semantic_qa/run_semdup_advisory.py             --repo .             --base-sha "$SEMANTIC_BASE"             --candidate-sha "$SEMANTIC_HEAD"             --repository "${{ github.repository }}"             --task-id "$SEMANTIC_TASK"             --profile tools/semantic_qa/profile.json             --input-manifest "$input/input-manifest.json"             --output-dir "$out"             --download-dir "$RUNNER_TEMP/semdup-package-download"             --runtime-dir "$RUNNER_TEMP/semdup-runtime"             --db-path .semdup/cache/semdup.sqlite             --db-cache-key "${{ steps.db-cache.outputs.cache-matched-key }}"
           if [ ! -f "$out/receipt.json" ]; then
-            printf '%s
-' '{"schema_version":1,"tool":"semdup","status":"UNAVAILABLE","reason":"orchestration_failed","acceptance_authority":false}' > "$out/receipt.json"
+            echo '{"schema_version":1,"tool":"semdup","status":"UNAVAILABLE","reason":"orchestration_failed","acceptance_authority":false}' > "$out/receipt.json"
           fi
           status=$(jq -r '.status' "$out/receipt.json")
           freshness=$(jq -r '.toolchain.freshness.status // "CURRENTNESS_UNKNOWN"' "$out/receipt.json")
