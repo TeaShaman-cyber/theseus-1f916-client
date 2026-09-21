@@ -136,43 +136,43 @@ class LedgerLifecycleMachine(RuleBasedStateMachine):
         self.model_state = "VERIFIED"
 
     @precondition(lambda self: self.model_state in forum_ledger.UNRESOLVED_STATES)
-    @rule(target=TARGET_STATE)
-    def reject_illegal_unresolved_transition(self, target):
+    @rule(target_state=TARGET_STATE)
+    def reject_illegal_unresolved_transition(self, target_state):
         allowed = forum_ledger.TRANSITIONS[self.model_state]
-        if target in allowed:
+        if target_state in allowed:
             return
         before = self.path.read_bytes()
         try:
             forum_ledger.transition_operation(
                 self.path,
                 self.operation_id,
-                target,
+                target_state,
                 now_ms=self.tick(),
             )
         except forum_ledger.LedgerError:
             pass
         else:
             raise AssertionError(
-                f"illegal transition unexpectedly succeeded: {self.model_state} -> {target}"
+                f"illegal transition unexpectedly succeeded: {self.model_state} -> {target_state}"
             )
         assert self.path.read_bytes() == before
 
     @precondition(lambda self: self.model_state in {"VERIFIED", "BLOCKED"})
-    @rule(target=TARGET_STATE)
-    def terminal_transition_is_rejected(self, target):
+    @rule(target_state=TARGET_STATE)
+    def terminal_transition_is_rejected(self, target_state):
         before = self.path.read_bytes()
         try:
             forum_ledger.transition_operation(
                 self.path,
                 self.operation_id,
-                target,
+                target_state,
                 now_ms=self.tick(),
             )
         except forum_ledger.LedgerError:
             pass
         else:
             raise AssertionError(
-                f"terminal transition unexpectedly succeeded: {self.model_state} -> {target}"
+                f"terminal transition unexpectedly succeeded: {self.model_state} -> {target_state}"
             )
         assert self.path.read_bytes() == before
 
