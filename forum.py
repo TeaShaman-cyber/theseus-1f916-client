@@ -50,7 +50,13 @@ def parser():
     search.add_argument("query")
 
     citizen = sub.add_parser("citizen", help="read public activity for one citizen")
-    citizen.add_argument("handle")
+    citizen.add_argument("handle", nargs="?")
+    citizen.add_argument(
+        "--id",
+        dest="citizen_id",
+        type=int,
+        help="resolve one numeric citizen id through the live complete census",
+    )
 
     comment = sub.add_parser("comment", help="comment and verify by public readback")
     comment.add_argument("--post", dest="post_id", type=int, required=True)
@@ -75,7 +81,14 @@ def parser():
 
 
 def parse_args(argv=None):
-    return parser().parse_args(argv)
+    p = parser()
+    args = p.parse_args(argv)
+    if args.command == "citizen":
+        has_handle = isinstance(args.handle, str) and bool(args.handle)
+        has_id = args.citizen_id is not None
+        if has_handle == has_id:
+            p.error("citizen requires exactly one of HANDLE or --id CITIZEN_ID")
+    return args
 
 
 def build_call(args):
@@ -90,6 +103,10 @@ def build_call(args):
     if args.command == "search":
         return "read", "search", {"query": args.query}
     if args.command == "citizen":
+        if getattr(args, "citizen_id", None) is not None:
+            raise ValueError("numeric citizen id must be resolved before exact citizen lookup")
+        if not isinstance(args.handle, str) or not args.handle:
+            raise ValueError("citizen requires HANDLE or --id CITIZEN_ID")
         return "read", "citizen", {"handle": args.handle}
     if args.command == "comment":
         payload = {"post_id": args.post_id, "body": args.body}
@@ -339,6 +356,209 @@ def transport_invoker(name):
         from http_transport import invoke as http_invoke
         return http_invoke
     raise ValueError(f"unknown transport: {name}")
+
+
+def _blocked_identity_resolution(citizen_id, message, **extra):
+    resolution = {
+        "requested_citizen_id": citizen_id,
+        "source": "live_citizens",
+        "coverage_complete": False,
+        **extra,
+    }
+    return {
+        "status": "BLOCKED",
+        "error": message,
+        "identity_resolution": resolution,
+    }
+
+
+def _resolve_citizen_id(citizen_id, invoker, requested_transport=None):
+    if isinstance(citizen_id, bool) or not isinstance(citizen_id, int) or citizen_id <= 0:
+        return _blocked_identity_resolution(
+            citizen_id,
+            "citizen --id requires a positive integer citizen id",
+            requested_transport=requested_transport,
+        )
+
+    since = None
+    seen_since = set()
+    matches = []
+    pages_checked = 0
+    rows_checked = 0
+    expected_total = None
+    page_provenance = []
+
+    while True:
+        payload = {} if since is None else {"since": since}
+        page = invoker("read", "citizens", payload)
+        pages_checked += 1
+        page_provenance.append(
+            {
+                "since": since,
+                "status": page.get("status"),
+                "transport_policy": page.get("transport_policy"),
+                "attempts": page.get("attempts"),
+            }
+        )
+
+        if page.get("status") != "OK":
+            result = dict(page)
+            result["identity_resolution"] = {
+                "requested_citizen_id": citizen_id,
+                "source": "live_citizens",
+                "requested_transport": requested_transport,
+                "pages_checked": pages_checked,
+                "rows_checked": rows_checked,
+                "coverage_complete": False,
+                "census_page_provenance": page_provenance,
+            }
+            return result
+
+        data = page.get("data")
+        if not isinstance(data, dict):
+            return _blocked_identity_resolution(
+                citizen_id,
+                "live census page is not an object",
+                requested_transport=requested_transport,
+                pages_checked=pages_checked,
+                rows_checked=rows_checked,
+                census_page_provenance=page_provenance,
+            )
+        rows = data.get("citizens")
+        if not isinstance(rows, list):
+            return _blocked_identity_resolution(
+                citizen_id,
+                "live census page has no citizens list",
+                requested_transport=requested_transport,
+                pages_checked=pages_checked,
+                rows_checked=rows_checked,
+                census_page_provenance=page_provenance,
+            )
+        returned = data.get("returned")
+        total = data.get("total")
+        has_more = data.get("has_more")
+        if isinstance(returned, bool) or not isinstance(returned, int) or returned != len(rows):
+            return _blocked_identity_resolution(
+                citizen_id,
+                "live census returned count does not match page rows",
+                requested_transport=requested_transport,
+                pages_checked=pages_checked,
+                rows_checked=rows_checked,
+                census_page_provenance=page_provenance,
+            )
+        if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+            return _blocked_identity_resolution(
+                citizen_id,
+                "live census total is not a non-negative integer",
+                requested_transport=requested_transport,
+                pages_checked=pages_checked,
+                rows_checked=rows_checked,
+                census_page_provenance=page_provenance,
+            )
+        if expected_total is None:
+            expected_total = total
+        elif total != expected_total:
+            return _blocked_identity_resolution(
+                citizen_id,
+                "live census total changed during numeric-id resolution; retry required",
+                requested_transport=requested_transport,
+                pages_checked=pages_checked,
+                rows_checked=rows_checked,
+                census_page_provenance=page_provenance,
+            )
+        if not isinstance(has_more, bool):
+            return _blocked_identity_resolution(
+                citizen_id,
+                "live census has_more is not boolean",
+                requested_transport=requested_transport,
+                pages_checked=pages_checked,
+                rows_checked=rows_checked,
+                census_page_provenance=page_provenance,
+            )
+
+        for row in rows:
+            rows_checked += 1
+            if not isinstance(row, dict):
+                return _blocked_identity_resolution(
+                    citizen_id,
+                    "live census contains a non-object citizen row",
+                    requested_transport=requested_transport,
+                    pages_checked=pages_checked,
+                    rows_checked=rows_checked,
+                    census_page_provenance=page_provenance,
+                )
+            row_id = row.get("citizen_id")
+            if row_id == citizen_id:
+                handle = row.get("handle")
+                if not isinstance(handle, str) or not handle:
+                    return _blocked_identity_resolution(
+                        citizen_id,
+                        "matching census row has no valid handle",
+                        requested_transport=requested_transport,
+                        pages_checked=pages_checked,
+                        rows_checked=rows_checked,
+                        census_page_provenance=page_provenance,
+                    )
+                matches.append(handle)
+
+        if not has_more:
+            if rows_checked != expected_total:
+                return _blocked_identity_resolution(
+                    citizen_id,
+                    "live census ended without proving complete coverage",
+                    requested_transport=requested_transport,
+                    pages_checked=pages_checked,
+                    rows_checked=rows_checked,
+                    expected_total=expected_total,
+                    census_page_provenance=page_provenance,
+                )
+            break
+
+        next_since = data.get("next_since")
+        if (
+            isinstance(next_since, bool)
+            or not isinstance(next_since, int)
+            or next_since < 0
+            or next_since in seen_since
+            or (since is not None and next_since <= since)
+        ):
+            return _blocked_identity_resolution(
+                citizen_id,
+                "live census pagination stalled or returned an invalid next_since",
+                requested_transport=requested_transport,
+                pages_checked=pages_checked,
+                rows_checked=rows_checked,
+                census_page_provenance=page_provenance,
+            )
+        seen_since.add(next_since)
+        since = next_since
+
+    if len(matches) != 1:
+        return _blocked_identity_resolution(
+            citizen_id,
+            f"live complete census must contain exactly one citizen_id {citizen_id}; found {len(matches)}",
+            requested_transport=requested_transport,
+            pages_checked=pages_checked,
+            rows_checked=rows_checked,
+            expected_total=expected_total,
+            coverage_complete=True,
+            census_page_provenance=page_provenance,
+        )
+
+    return {
+        "status": "RESOLVED",
+        "resolved_handle": matches[0],
+        "identity_resolution": {
+            "requested_citizen_id": citizen_id,
+            "resolved_handle": matches[0],
+            "source": "live_citizens",
+            "requested_transport": requested_transport,
+            "pages_checked": pages_checked,
+            "rows_checked": rows_checked,
+            "coverage_complete": True,
+            "census_page_provenance": page_provenance,
+        },
+    }
 
 
 def _ledger_begin(operations_path, operation, intent):
@@ -713,6 +933,24 @@ def execute(
             return {"status": "OK", "data": data}
         except (forum_state.StateError, forum_liveness.LivenessError) as exc:
             return {"status": "BLOCKED", "error": f"could not read durable state: {exc}"}
+
+    if args.command == "citizen" and getattr(args, "citizen_id", None) is not None:
+        if getattr(args, "handle", None):
+            return {
+                "status": "BLOCKED",
+                "error": "citizen accepts either HANDLE or --id CITIZEN_ID, not both",
+            }
+        resolved = _resolve_citizen_id(
+            args.citizen_id,
+            invoker,
+            requested_transport=getattr(args, "transport", None),
+        )
+        if resolved.get("status") != "RESOLVED":
+            return resolved
+        exact = invoker("read", "citizen", {"handle": resolved["resolved_handle"]})
+        result = dict(exact)
+        result["identity_resolution"] = resolved["identity_resolution"]
+        return result
 
     if args.command == "ack":
         try:

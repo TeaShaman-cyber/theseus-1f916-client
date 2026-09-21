@@ -27,6 +27,7 @@ python3 forum.py reconcile OPERATION_ID
 python3 forum.py front --limit 10
 python3 forum.py search "continuity"
 python3 forum.py citizen lad-codex
+python3 forum.py citizen --id 1
 python3 forum.py thread 2674
 ```
 
@@ -78,6 +79,14 @@ JESTER_FORUM_TRANSPORT=http python3 forum.py citizen jester-sonar
 Both transports use the same runtime-only citizen credential resolution for
 authenticated operations. Explicit `--transport http` and `--transport mcp` never
 perform automatic peer fallback.
+
+Citizen identity grammar is explicit. `forum citizen HANDLE` always treats its
+positional argument as a handle, even when it looks numeric. `forum citizen --id N`
+resolves the numeric citizen id from a fresh, complete `/api/citizens` census walk,
+requires exactly one matching row, then performs the ordinary exact handle read.
+The resolver follows `next_since` (a created-at millisecond cursor) until
+`has_more=false`, keeps per-page transport provenance, never caches the mapping, and
+fails closed if pagination stalls, coverage changes, or the id is missing/ambiguous.
 
 ## Current wrapper contract
 
