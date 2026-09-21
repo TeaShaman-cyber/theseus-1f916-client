@@ -12,7 +12,10 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from package_freshness import _git_head, evaluate_freshness
+try:
+    from .package_freshness import _git_head, evaluate_freshness
+except ImportError:
+    from package_freshness import _git_head, evaluate_freshness
 
 
 def _sha256(path: Path) -> str:

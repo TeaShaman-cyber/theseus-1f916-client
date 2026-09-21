@@ -29,6 +29,11 @@ class SemanticDbCacheContractTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", self.seed)
         self.assertIn("actions/cache/save@", self.seed)
         self.assertIn("actions: write", self.seed)
+        self.assertIn("timeout-minutes: 45", self.seed)
+        self.assertIn("Extract exact main corpus", self.seed)
+        self.assertIn("Embed pending main corpus", self.seed)
+        self.assertIn("Finalize seed receipt", self.seed)
+        self.assertNotIn("ci --mode scan", self.seed)
 
 
 if __name__ == "__main__":
