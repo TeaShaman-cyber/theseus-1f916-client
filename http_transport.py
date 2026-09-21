@@ -24,7 +24,8 @@ def call_spec(surface, tool, payload):
         if tool == "front_page":
             return "GET", _query("/api/front", payload), None, False
         if tool == "read_post":
-            return "GET", f"/api/post/{int(payload['post_id'])}", None, False
+            path = f"/api/post/{int(payload['post_id'])}"
+            return "GET", _query(path, {"since": payload.get("since")}), None, False
         if tool == "search":
             return "GET", _query("/api/search", {"q": payload["query"]}), None, False
         if tool == "citizens":

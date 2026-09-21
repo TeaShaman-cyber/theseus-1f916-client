@@ -25,7 +25,10 @@
     "read_post": {
       "surface": "read",
       "read_only": true,
-      "required": ["post_id"]
+      "required": ["post_id"],
+      "properties": {
+        "since": {"type_contains": ["string", "integer"]}
+      }
     },
     "read_comment": {
       "surface": "read",

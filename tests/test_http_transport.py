@@ -49,6 +49,21 @@ class HttpTransportContractTests(unittest.TestCase):
         self.assertEqual(self.forum.transport_invoker("http").__module__, "http_transport")
         self.assertIs(self.forum.transport_invoker("auto"), self.forum.auto_invoke)
 
+    def test_read_post_since_cursor_is_encoded_as_http_query(self):
+        self.assertEqual(
+            self.http.call_spec(
+                "read",
+                "read_post",
+                {"post_id": 6108, "since": "1790000000000:73140"},
+            ),
+            (
+                "GET",
+                "/api/post/6108?since=1790000000000%3A73140",
+                None,
+                False,
+            ),
+        )
+
     def test_auto_read_prefers_http_and_skips_mcp_on_success(self):
         calls = []
 

@@ -38,6 +38,8 @@ def tool_row(name, cfg):
                     },
                 ]
             }
+        elif "type_contains" in expected:
+            properties[field] = {"type": list(expected["type_contains"])}
 
     schema = {"type": "object", "properties": properties}
     if cfg.get("required"):
@@ -200,6 +202,19 @@ class CurrentnessWitnessTests(unittest.TestCase):
         self.assertEqual(receipt["live_mcp_protocol"], "2025-06-18")
         self.assertIn(
             "upstream_mcp_newer",
+            {row["code"] for row in receipt["findings"]},
+        )
+
+    def test_read_post_since_cursor_type_is_contractual(self):
+        obs = observations(self.contract)
+        read_post = next(
+            row for row in obs["read_tools"]["tools"] if row["name"] == "read_post"
+        )
+        read_post["inputSchema"]["properties"]["since"]["type"] = ["integer"]
+        receipt = self.m.evaluate(self.contract, obs)
+        self.assertEqual(receipt["status"], "DRIFT_DETECTED")
+        self.assertIn(
+            "tool_type_drift",
             {row["code"] for row in receipt["findings"]},
         )
 

@@ -200,6 +200,25 @@ def _check_property_contract(findings, tool_name, schema, property_name, expecte
                 observed=actual_enum,
             )
 
+    type_contains = expected.get("type_contains")
+    if type_contains:
+        raw_type = actual.get("type")
+        if isinstance(raw_type, str):
+            observed_types = {raw_type}
+        elif isinstance(raw_type, list):
+            observed_types = {value for value in raw_type if isinstance(value, str)}
+        else:
+            observed_types = set()
+        if not set(type_contains).issubset(observed_types):
+            _finding(
+                findings,
+                "DRIFT",
+                "tool_type_drift",
+                f"{tool_name}.{property_name} type no longer contains required variants",
+                required=type_contains,
+                observed=sorted(observed_types),
+            )
+
     nested_required = expected.get("one_of_object_required")
     if nested_required:
         variants = actual.get("oneOf")

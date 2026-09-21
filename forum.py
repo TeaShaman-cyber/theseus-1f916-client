@@ -225,6 +225,221 @@ def _record_from_readback(result, kind):
     return nested if isinstance(nested, dict) else data
 
 
+THREAD_MAX_PAGES = 1000
+
+
+def _thread_cursor_key(value):
+    if not isinstance(value, str):
+        return None
+    left, separator, right = value.partition(":")
+    if not separator or not left.isdigit() or not right.isdigit():
+        return None
+    created_at = int(left)
+    comment_id = int(right)
+    if created_at < 0 or comment_id < 1:
+        return None
+    return created_at, comment_id
+
+
+def _thread_page_receipt(page_number, since, result):
+    receipt = {
+        "page": page_number,
+        "status": result.get("status", "BLOCKED"),
+    }
+    if since is not None:
+        receipt["since"] = since
+    for key in (
+        "route",
+        "transport_policy",
+        "retry_policy",
+        "observer_scope",
+        "recommended_backoff_seconds",
+        "peer_fallback_skipped",
+    ):
+        if key in result:
+            receipt[key] = result[key]
+    attempts = result.get("attempts")
+    if isinstance(attempts, list):
+        receipt["attempts"] = [
+            dict(row) if isinstance(row, dict) else row for row in attempts
+        ]
+    return receipt
+
+
+def _thread_partial_data(first_data, comments):
+    if not isinstance(first_data, dict):
+        return None
+    partial = dict(first_data)
+    partial["comments"] = list(comments)
+    partial["comments_returned"] = len(comments)
+    partial["has_more"] = True
+    return partial
+
+
+def _thread_contract_failure(
+    message,
+    page_receipts,
+    first_data,
+    comments,
+    pages_completed,
+    continuation_cursor=None,
+):
+    result = {
+        "status": "BLOCKED",
+        "route": "thread",
+        "error": message,
+        "thread_complete": False,
+        "pages_completed": pages_completed,
+        "page_receipts": page_receipts,
+    }
+    partial = _thread_partial_data(first_data, comments)
+    if partial is not None:
+        result["partial_data"] = partial
+    if continuation_cursor is not None:
+        result["continuation_cursor"] = continuation_cursor
+    return result
+
+
+def _read_complete_thread(post_id, invoker):
+    payload = {"post_id": post_id}
+    seen_cursors = set()
+    seen_comment_ids = set()
+    page_receipts = []
+    comments = []
+    first_data = None
+    comments_total = None
+    pages_completed = 0
+
+    for page_number in range(1, THREAD_MAX_PAGES + 1):
+        since = payload.get("since")
+        page = invoker("read", "read_post", payload)
+        page_receipts.append(_thread_page_receipt(page_number, since, page))
+
+        if page.get("status") != "OK":
+            result = dict(page)
+            result["thread_complete"] = False
+            result["pages_completed"] = pages_completed
+            result["page_receipts"] = page_receipts
+            partial = _thread_partial_data(first_data, comments)
+            if partial is not None:
+                result["partial_data"] = partial
+            if since is not None:
+                result["continuation_cursor"] = since
+            return result
+
+        data = page.get("data")
+        if not isinstance(data, dict):
+            return _thread_contract_failure(
+                "thread page has no object data",
+                page_receipts, first_data, comments, pages_completed, since,
+            )
+        post = data.get("post")
+        if not isinstance(post, dict) or post.get("id") != post_id:
+            return _thread_contract_failure(
+                "thread page post identity does not match the requested post",
+                page_receipts, first_data, comments, pages_completed, since,
+            )
+        page_comments = data.get("comments")
+        if not isinstance(page_comments, list):
+            return _thread_contract_failure(
+                "thread page comments is not a list",
+                page_receipts, first_data, comments, pages_completed, since,
+            )
+        returned = data.get("comments_returned")
+        if isinstance(returned, bool) or not isinstance(returned, int) or returned != len(page_comments):
+            return _thread_contract_failure(
+                "thread page comments_returned does not match the page",
+                page_receipts, first_data, comments, pages_completed, since,
+            )
+        total = data.get("comments_total")
+        if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+            return _thread_contract_failure(
+                "thread page comments_total is not a non-negative integer",
+                page_receipts, first_data, comments, pages_completed, since,
+            )
+        if first_data is None:
+            first_data = dict(data)
+            comments_total = total
+        elif total != comments_total:
+            return _thread_contract_failure(
+                "thread comments_total changed between pages",
+                page_receipts, first_data, comments, pages_completed, since,
+            )
+
+        for row in page_comments:
+            if not isinstance(row, dict):
+                return _thread_contract_failure(
+                    "thread page contains a non-object comment",
+                    page_receipts, first_data, comments, pages_completed, since,
+                )
+            comment_id = row.get("id")
+            if isinstance(comment_id, bool) or not isinstance(comment_id, int):
+                return _thread_contract_failure(
+                    "thread page contains a comment without an integer id",
+                    page_receipts, first_data, comments, pages_completed, since,
+                )
+            if comment_id in seen_comment_ids:
+                return _thread_contract_failure(
+                    "thread pagination repeated a comment id",
+                    page_receipts, first_data, comments, pages_completed, since,
+                )
+            seen_comment_ids.add(comment_id)
+            comments.append(row)
+
+        pages_completed += 1
+        has_more = data.get("has_more")
+        if not isinstance(has_more, bool):
+            return _thread_contract_failure(
+                "thread page has_more is not boolean",
+                page_receipts, first_data, comments, pages_completed, since,
+            )
+        if not has_more:
+            if len(comments) != comments_total:
+                return _thread_contract_failure(
+                    "thread ended before comments_returned matched comments_total",
+                    page_receipts, first_data, comments, pages_completed, since,
+                )
+            merged = dict(first_data)
+            merged["comments"] = comments
+            merged["comments_returned"] = len(comments)
+            merged["comments_total"] = comments_total
+            merged["has_more"] = False
+            merged.pop("next_since", None)
+            result = dict(page)
+            result["data"] = merged
+            result["thread_complete"] = True
+            result["pages_walked"] = pages_completed
+            result["page_receipts"] = page_receipts
+            return result
+
+        next_since = data.get("next_since")
+        next_key = _thread_cursor_key(next_since)
+        if next_key is None:
+            return _thread_contract_failure(
+                "thread continuation cursor is missing or malformed",
+                page_receipts, first_data, comments, pages_completed, since,
+            )
+        if next_since in seen_cursors:
+            return _thread_contract_failure(
+                "thread pagination repeated a continuation cursor",
+                page_receipts, first_data, comments, pages_completed, next_since,
+            )
+        if since is not None:
+            current_key = _thread_cursor_key(since)
+            if current_key is None or next_key <= current_key:
+                return _thread_contract_failure(
+                    "thread continuation cursor did not advance",
+                    page_receipts, first_data, comments, pages_completed, next_since,
+                )
+        seen_cursors.add(next_since)
+        payload = {"post_id": post_id, "since": next_since}
+
+    return _thread_contract_failure(
+        f"thread exceeded {THREAD_MAX_PAGES} pages without completion",
+        page_receipts, first_data, comments, pages_completed, payload.get("since"),
+    )
+
+
 def _read_vote_target(args, invoker):
     if args.target_type == "post":
         result = invoker("read", "read_post", {"post_id": args.target_id})
@@ -959,6 +1174,9 @@ def execute(
         result = dict(exact)
         result["identity_resolution"] = resolved["identity_resolution"]
         return result
+
+    if args.command == "thread":
+        return _read_complete_thread(args.post_id, invoker)
 
     if args.command == "ack":
         try:

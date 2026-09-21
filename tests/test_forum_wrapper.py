@@ -206,13 +206,23 @@ class ForumExecutionTests(unittest.TestCase):
         cls.forum = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.forum)
 
-    def test_execute_routes_parsed_command_through_invoker(self):
+    def test_execute_routes_single_page_thread_through_invoker(self):
         self.assertTrue(hasattr(self.forum, "execute"), "execute contract is missing")
         seen = {}
 
         def invoker(server, tool, payload, **kwargs):
             seen.update(server=server, tool=tool, payload=payload)
-            return {"status": "OK", "data": {"ok": True}}
+            return {
+                "status": "OK",
+                "route": "http:GET /api/post/2129",
+                "data": {
+                    "post": {"id": 2129, "title": "thread"},
+                    "comments": [],
+                    "comments_returned": 0,
+                    "comments_total": 0,
+                    "has_more": False,
+                },
+            }
 
         args = self.forum.parse_args(["thread", "2129"])
         result = self.forum.execute(args, invoker=invoker)
@@ -222,6 +232,169 @@ class ForumExecutionTests(unittest.TestCase):
             "payload": {"post_id": 2129},
         })
         self.assertEqual(result["status"], "OK")
+        self.assertTrue(result["thread_complete"])
+        self.assertEqual(result["pages_walked"], 1)
+
+    def test_thread_walks_next_since_until_complete_and_preserves_page_receipts(self):
+        calls = []
+
+        def invoker(surface, tool, payload):
+            calls.append((surface, tool, dict(payload)))
+            if "since" not in payload:
+                return {
+                    "status": "OK",
+                    "transport_policy": "http-primary-read",
+                    "attempts": [{
+                        "transport": "http",
+                        "status": "OK",
+                        "route": "http:GET /api/post/2129",
+                    }],
+                    "data": {
+                        "post": {"id": 2129, "title": "thread"},
+                        "comments": [{"id": 10, "body": "one"}],
+                        "comments_returned": 1,
+                        "comments_total": 2,
+                        "has_more": True,
+                        "next_since": "100:10",
+                    },
+                }
+            self.assertEqual(payload["since"], "100:10")
+            return {
+                "status": "OK",
+                "transport_policy": "http-primary-read",
+                "attempts": [{
+                    "transport": "http",
+                    "status": "OK",
+                    "route": "http:GET /api/post/2129",
+                }],
+                "data": {
+                    "post": {"id": 2129, "title": "thread"},
+                    "comments": [{"id": 11, "body": "two"}],
+                    "comments_returned": 1,
+                    "comments_total": 2,
+                    "has_more": False,
+                },
+            }
+
+        result = self.forum.execute(
+            self.forum.parse_args(["thread", "2129"]),
+            invoker=invoker,
+        )
+        self.assertEqual(result["status"], "OK")
+        self.assertTrue(result["thread_complete"])
+        self.assertEqual(result["pages_walked"], 2)
+        self.assertEqual(
+            calls,
+            [
+                ("read", "read_post", {"post_id": 2129}),
+                ("read", "read_post", {"post_id": 2129, "since": "100:10"}),
+            ],
+        )
+        self.assertEqual([row["id"] for row in result["data"]["comments"]], [10, 11])
+        self.assertEqual(result["data"]["comments_returned"], 2)
+        self.assertEqual(result["data"]["comments_total"], 2)
+        self.assertFalse(result["data"]["has_more"])
+        self.assertEqual(len(result["page_receipts"]), 2)
+        self.assertEqual(result["page_receipts"][1]["since"], "100:10")
+        self.assertEqual(
+            result["page_receipts"][0]["attempts"][0]["transport"],
+            "http",
+        )
+
+    def test_thread_fails_closed_on_repeated_continuation_cursor(self):
+        calls = []
+
+        def invoker(surface, tool, payload):
+            calls.append(dict(payload))
+            comment_id = 10 + len(calls)
+            return {
+                "status": "OK",
+                "data": {
+                    "post": {"id": 2129},
+                    "comments": [{"id": comment_id}],
+                    "comments_returned": 1,
+                    "comments_total": 3,
+                    "has_more": True,
+                    "next_since": "100:10",
+                },
+            }
+
+        result = self.forum.execute(
+            self.forum.parse_args(["thread", "2129"]),
+            invoker=invoker,
+        )
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertFalse(result["thread_complete"])
+        self.assertIn("repeated", result["error"].lower())
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result["pages_completed"], 2)
+
+    def test_thread_fails_closed_on_backward_continuation_cursor(self):
+        calls = []
+
+        def invoker(surface, tool, payload):
+            calls.append(dict(payload))
+            if len(calls) == 1:
+                cursor = "100:10"
+            else:
+                cursor = "99:99"
+            return {
+                "status": "OK",
+                "data": {
+                    "post": {"id": 2129},
+                    "comments": [{"id": 10 + len(calls)}],
+                    "comments_returned": 1,
+                    "comments_total": 3,
+                    "has_more": True,
+                    "next_since": cursor,
+                },
+            }
+
+        result = self.forum.execute(
+            self.forum.parse_args(["thread", "2129"]),
+            invoker=invoker,
+        )
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertFalse(result["thread_complete"])
+        self.assertIn("did not advance", result["error"].lower())
+        self.assertEqual(result["continuation_cursor"], "99:99")
+        self.assertEqual(len(calls), 2)
+
+    def test_thread_preserves_partial_data_when_later_page_is_rate_limited(self):
+        calls = []
+
+        def invoker(surface, tool, payload):
+            calls.append(dict(payload))
+            if len(calls) == 1:
+                return {
+                    "status": "OK",
+                    "route": "http:GET /api/post/2129",
+                    "data": {
+                        "post": {"id": 2129},
+                        "comments": [{"id": 10}],
+                        "comments_returned": 1,
+                        "comments_total": 2,
+                        "has_more": True,
+                        "next_since": "100:10",
+                    },
+                }
+            return {
+                "status": "RATE_LIMITED",
+                "route": "http:GET /api/post/2129",
+                "error": "429",
+                "recommended_backoff_seconds": 60.0,
+            }
+
+        result = self.forum.execute(
+            self.forum.parse_args(["thread", "2129"]),
+            invoker=invoker,
+        )
+        self.assertEqual(result["status"], "RATE_LIMITED")
+        self.assertFalse(result["thread_complete"])
+        self.assertEqual(result["pages_completed"], 1)
+        self.assertEqual(result["continuation_cursor"], "100:10")
+        self.assertEqual([row["id"] for row in result["partial_data"]["comments"]], [10])
+        self.assertEqual(len(result["page_receipts"]), 2)
 
     def test_rate_limit_is_scoped_to_route_and_does_not_poison_next_route(self):
         def runner(argv, **kwargs):
