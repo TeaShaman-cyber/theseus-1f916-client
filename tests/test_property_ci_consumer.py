@@ -9,6 +9,7 @@ LOCK = ROOT / "requirements" / "ci-property.txt"
 ENDPOINT = ROOT / "tools" / "ci" / "property-test"
 STATE_PROPERTY = ROOT / "property_tests" / "test_state_properties.py"
 LEDGER_PROPERTY = ROOT / "property_tests" / "test_ledger_properties.py"
+STATEFUL_LEDGER = ROOT / "property_tests" / "test_ledger_state_machine.py"
 PROFILE_SHA = "0fa76f7aa1ccad2fb175591c9497157d8c60e481"
 
 
@@ -55,9 +56,19 @@ class PropertyCiConsumerContractTest(unittest.TestCase):
             self.assertIn("derandomize=True", text)
             self.assertIn("database=None", text)
             self.assertGreaterEqual(text.count("@PROPERTY_SETTINGS"), 3)
+
+        stateful = STATEFUL_LEDGER.read_text()
+        self.assertIn("RuleBasedStateMachine", stateful)
+        self.assertIn("max_examples=60", stateful)
+        self.assertIn("stateful_step_count=20", stateful)
+        self.assertIn("deadline=None", stateful)
+        self.assertIn("derandomize=True", stateful)
+        self.assertIn("database=None", stateful)
+
         endpoint = ENDPOINT.read_text()
-        self.assertIn("suite=state-machines", endpoint)
-        self.assertIn("properties=8", endpoint)
+        self.assertIn("suite=property-and-stateful", endpoint)
+        self.assertIn("deterministic=true", endpoint)
+        self.assertNotIn("properties=8", endpoint)
 
 
 if __name__ == "__main__":
