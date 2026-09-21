@@ -1,0 +1,104 @@
+name: Semantic contract advisory
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: semantic-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trace:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [semble, needle3]
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Prepare bounded trace input
+        shell: bash
+        run: |
+          set -euo pipefail
+          profile=tools/semantic_qa/profile.json
+          out="$RUNNER_TEMP/semantic-input"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+            task="pr-${{ github.event.pull_request.number }}"
+          else
+            base="$(git rev-parse HEAD^)"
+            head="$(git rev-parse HEAD)"
+            task="manual-${{ github.run_id }}"
+          fi
+          python3 tools/semantic_qa/trace_input.py             --base "$base"             --head "$head"             --output "$out"             --repository "${{ github.repository }}"             --task-id "$task"             --max-files "$(jq -r '.input_budget.max_files' "$profile")"             --max-total-bytes "$(jq -r '.input_budget.max_total_bytes' "$profile")"             --max-file-bytes "$(jq -r '.input_budget.max_file_bytes' "$profile")"
+          {
+            echo "SEMANTIC_BASE=$base"
+            echo "SEMANTIC_HEAD=$head"
+            echo "SEMANTIC_TASK=$task"
+          } >> "$GITHUB_ENV"
+
+      - name: Run packaged contract advisory
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          tool="${{ matrix.tool }}"
+          out="$RUNNER_TEMP/semantic-$tool"
+          input="$RUNNER_TEMP/semantic-input"
+          mkdir -p "$out"
+          python3 tools/semantic_qa/run_contract_advisory.py             --tool "$tool"             --repository "${{ github.repository }}"             --task-id "$SEMANTIC_TASK"             --base-sha "$SEMANTIC_BASE"             --candidate-sha "$SEMANTIC_HEAD"             --profile tools/semantic_qa/profile.json             --input-manifest "$input/input-manifest.json"             --input-root "$input"             --corpus-dir docs/qa/semantic-contract-corpus             --output-dir "$out"             --download-dir "$RUNNER_TEMP/$tool-package-download"             --runtime-dir "$RUNNER_TEMP/$tool-runtime"             --env-dir "$RUNNER_TEMP/$tool-env"
+          rc=$?
+          if [ "$rc" -ne 0 ] || [ ! -f "$out/receipt.json" ]; then
+            echo '{"schema_version":1,"status":"UNAVAILABLE","reason":"orchestration_failed","acceptance_authority":false}' > "$out/receipt.json"
+          fi
+          status=$(jq -r '.status // "UNAVAILABLE"' "$out/receipt.json")
+          freshness=$(jq -r '.toolchain.freshness.status // "CURRENTNESS_UNKNOWN"' "$out/receipt.json")
+          setup_ms=$(jq -r '.toolchain.setup_ms // 0' "$out/receipt.json")
+          cold_ms=$(jq -r '.cold.wall_ms // 0' "$out/receipt.json")
+          warm_ms=$(jq -r '.warm.wall_ms // 0' "$out/receipt.json")
+          if [ "$freshness" = "STALE_AVAILABLE" ] || [ "$freshness" = "CURRENTNESS_UNKNOWN" ]; then
+            echo "::warning title=$tool package freshness::$freshness"
+          fi
+          {
+            echo "### $tool contract advisory"
+            echo
+            echo "- status: `$status`"
+            echo "- package freshness: `$freshness`"
+            echo "- package setup ms: `$setup_ms`"
+            echo "- cold retrieval ms: `$cold_ms`"
+            echo "- warm retrieval ms: `$warm_ms`"
+            echo "- candidate: `$SEMANTIC_HEAD`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Upload semantic trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: semantic-${{ matrix.tool }}-${{ env.SEMANTIC_TASK }}-${{ env.SEMANTIC_HEAD }}
+          path: |
+            ${{ runner.temp }}/semantic-input
+            ${{ runner.temp }}/semantic-${{ matrix.tool }}
+          if-no-files-found: warn
+          retention-days: 90
