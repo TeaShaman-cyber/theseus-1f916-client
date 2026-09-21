@@ -8,9 +8,9 @@ import time
 from pathlib import Path
 
 try:
-    from .prepare_rank_toolchain import prepare
+    from .prepare_rank_toolchain import prepare_local
 except ImportError:
-    from prepare_rank_toolchain import prepare
+    from prepare_rank_toolchain import prepare_local
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -30,7 +30,7 @@ def main() -> int:
     parser.add_argument("--input-root", type=Path, required=True)
     parser.add_argument("--corpus-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--download-dir", type=Path, required=True)
+    parser.add_argument("--mechanics-receipt", type=Path, required=True)
     parser.add_argument("--runtime-dir", type=Path, required=True)
     parser.add_argument("--env-dir", type=Path, required=True)
     args = parser.parse_args()
@@ -41,12 +41,22 @@ def main() -> int:
     toolchain_path = args.output_dir / "toolchain-receipt.json"
     profiles = json.loads(args.profile.read_text())
     manifest = json.loads(args.input_manifest.read_text())
+    mechanics = json.loads(args.mechanics_receipt.read_text())
 
-    toolchain = prepare(
+    if mechanics.get("base_sha") != args.base_sha:
+        raise RuntimeError("mechanics base SHA mismatch")
+    if mechanics.get("candidate_sha") != args.candidate_sha:
+        raise RuntimeError("mechanics candidate SHA mismatch")
+    if mechanics.get("tool") != args.tool:
+        raise RuntimeError("mechanics tool mismatch")
+    if mechanics.get("input_status") != manifest.get("status"):
+        raise RuntimeError("mechanics input status mismatch")
+
+    toolchain = prepare_local(
         tool=args.tool,
         profiles=profiles,
         input_status=manifest["status"],
-        download_dir=args.download_dir,
+        mechanics=mechanics,
         runtime_dir=args.runtime_dir,
         env_dir=args.env_dir,
     )
