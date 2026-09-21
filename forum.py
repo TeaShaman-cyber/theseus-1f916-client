@@ -191,6 +191,36 @@ def invoke(surface, tool, payload, runner=subprocess.run, base_env=None, load_va
     return {"status": "OK", "data": data}
 
 
+def _with_search_completeness(result):
+    if result.get("status") != "OK":
+        return result
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return result
+
+    normalized = dict(result)
+    normalized_data = dict(data)
+    has_more = data.get("has_more")
+    if isinstance(has_more, bool):
+        completeness = {
+            "status": "TRUNCATED" if has_more else "COMPLETE",
+            "evidence": "server_has_more",
+        }
+        if has_more:
+            completeness["action"] = "narrow_query_or_raise_limit"
+            max_limit = data.get("max_limit")
+            if isinstance(max_limit, int) and not isinstance(max_limit, bool):
+                completeness["max_limit"] = max_limit
+    else:
+        completeness = {
+            "status": "UNKNOWN",
+            "evidence": "truncation_signal_unavailable",
+        }
+    normalized_data["completeness"] = completeness
+    normalized["data"] = normalized_data
+    return normalized
+
+
 def _load_citizen_value():
     from client import credential
     return credential()
@@ -1194,6 +1224,9 @@ def execute(
                 ledger_error=ledger_error,
             )
         return result
+
+    if args.command == "search":
+        return _with_search_completeness(result)
 
     if args.command == "watch":
         data = result.get("data") or {}

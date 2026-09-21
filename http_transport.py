@@ -162,7 +162,7 @@ def _normalize(tool, data):
     results = data.get("results")
     if not isinstance(results, list):
         return data
-    return {
+    normalized = {
         "results": [
             {
                 "id": str(row.get("id")),
@@ -173,6 +173,10 @@ def _normalize(tool, data):
             if isinstance(row, dict)
         ]
     }
+    for key in ("has_more", "count", "returned", "limit", "max_limit", "note"):
+        if key in data:
+            normalized[key] = data[key]
+    return normalized
 
 
 def invoke(surface, tool, payload, requester=None, cache_path=CACHE, if_none_match=None):

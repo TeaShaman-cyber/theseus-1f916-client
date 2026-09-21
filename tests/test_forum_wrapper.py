@@ -223,6 +223,37 @@ class ForumExecutionTests(unittest.TestCase):
         })
         self.assertEqual(result["status"], "OK")
 
+    def test_execute_search_surfaces_transport_independent_completeness(self):
+        cases = [
+            (
+                {"results": [{"id": "1"}], "has_more": True, "max_limit": 50},
+                {
+                    "status": "TRUNCATED",
+                    "evidence": "server_has_more",
+                    "action": "narrow_query_or_raise_limit",
+                    "max_limit": 50,
+                },
+            ),
+            (
+                {"results": [], "has_more": False},
+                {"status": "COMPLETE", "evidence": "server_has_more"},
+            ),
+            (
+                {"results": [{"id": "1"}]},
+                {
+                    "status": "UNKNOWN",
+                    "evidence": "truncation_signal_unavailable",
+                },
+            ),
+        ]
+        for data, expected in cases:
+            with self.subTest(expected=expected["status"]):
+                result = self.forum.execute(
+                    self.forum.parse_args(["search", "client"]),
+                    invoker=lambda *args, data=data: {"status": "OK", "data": dict(data)},
+                )
+                self.assertEqual(result["data"]["completeness"], expected)
+
     def test_rate_limit_is_scoped_to_route_and_does_not_poison_next_route(self):
         def runner(argv, **kwargs):
             route = next(part for part in argv if part.startswith("forum-read."))
