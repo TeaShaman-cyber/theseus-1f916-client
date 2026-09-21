@@ -96,8 +96,28 @@ def _cache_control_no_store(headers):
 
 
 
+def _etag_opaque_tag(value):
+    if not isinstance(value, str):
+        return None
+    raw = value[2:] if value.startswith("W/") else value
+    if len(raw) < 2 or raw[0] != '"' or raw[-1] != '"':
+        return None
+    opaque = raw[1:-1]
+    for char in opaque:
+        code = ord(char)
+        if char == '"' or code < 0x21 or code == 0x7F:
+            return None
+    return opaque
+
+
+def _weak_etag_equal(left, right):
+    left_tag = _etag_opaque_tag(left)
+    right_tag = _etag_opaque_tag(right)
+    return left_tag is not None and right_tag is not None and left_tag == right_tag
+
+
 def _caller_revalidation(route, sent_etag, response_etag=None):
-    if response_etag is not None and response_etag != sent_etag:
+    if response_etag is not None and not _weak_etag_equal(response_etag, sent_etag):
         return {
             "status": "BLOCKED",
             "route": route,
@@ -119,7 +139,7 @@ def _cached_revalidation(route, entry, sent_etag, response_etag=None):
             "cache_status": "MISS_ON_304",
             "error": "HTTP 304 arrived without a matching cached validator/body",
         }
-    if response_etag is not None and response_etag != sent_etag:
+    if response_etag is not None and not _weak_etag_equal(response_etag, sent_etag):
         return {
             "status": "BLOCKED",
             "route": route,
@@ -167,11 +187,11 @@ def invoke(surface, tool, payload, requester=None, cache_path=CACHE, if_none_mat
 
     route = f"http:{method} {path.split('?', 1)[0]}"
     if if_none_match is not None:
-        if not isinstance(if_none_match, str) or not if_none_match:
+        if _etag_opaque_tag(if_none_match) is None:
             return {
                 "status": "BLOCKED",
                 "route": route,
-                "error": "if_none_match must be a non-empty ETag string",
+                "error": "if_none_match must be one valid quoted ETag",
             }
         if not _public_cacheable(surface, method):
             return {
