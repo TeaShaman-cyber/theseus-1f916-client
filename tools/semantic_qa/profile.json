@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "consumer_repository": "TeaShaman-cyber/theseus-1f916-client",
+  "source_r8_repository": "TeaShaman-cyber/theseus-research",
+  "source_r8_merge_sha": "694b6131c4c6f2ea1402788bc7260a6062649489",
+  "input_budget": {
+    "max_files": 20,
+    "max_total_bytes": 262144,
+    "max_file_bytes": 65536
+  },
+  "semdup": {
+    "source_sha": "829f90ad94f453b73a24e46413202e9ece0b49e8",
+    "model_key": "nomic-ai/CodeRankEmbed@cpu-nbits-int4-asym",
+    "model_release_tag": "model-coderankembed-1",
+    "model_release_tag_sha": "b395e94fe94acdf5f3f7c21562a527c4306f66f8",
+    "min_lines": 8,
+    "unit_kind": "function",
+    "package": {
+      "repository": "TeaShaman-cyber/theseus-research",
+      "run_id": 35538151476,
+      "artifact_id": 10614095162,
+      "artifact_name": "semdup-toolchain-829f90ad94f453b73a24e46413202e9ece0b49e8-linux-x86_64",
+      "artifact_digest": "sha256:3e659b6a41a79077b38b45ad48a9d094af81324916708a3e7ff1e5925fbc435e",
+      "tar_file": "semdup-toolchain.tar.gz",
+      "tar_sha256": "58894995a4a087be743a3b802a31df05677902c3b6829775382538b1a65bbbdb",
+      "built_at": "2026-09-20T21:18:17Z",
+      "expires_at": "2026-12-19T21:15:47Z",
+      "builder_head_sha": "b0b2b2610f3cf1d8d8a8dee687d818d484686e8a",
+      "runner": "ubuntu-24.04",
+      "platform_scope": "linux-x86_64-glibc2.39",
+      "integrity_at_build": "upstream_model_blake3_verified"
+    },
+    "freshness": {
+      "max_age_days": 30,
+      "expiry_warning_days": 14,
+      "git_url": "https://github.com/niklebedenko/semdup.git",
+      "git_ref": "refs/heads/main"
+    },
+    "db_cache": {
+      "schema": 3,
+      "path": ".semdup/cache/semdup.sqlite",
+      "seed_metadata": ".semdup/cache/seed.json",
+      "key_prefix": "semdup-db-v1-ubuntu24-schema3-src829f90ad-coderankembed-int4",
+      "save_authority": "trusted-default-branch-push-only",
+      "pr_restore": "exact-base-sha-only"
+    }
+  }
+}
