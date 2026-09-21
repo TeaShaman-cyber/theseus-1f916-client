@@ -29,6 +29,15 @@ class HttpResponse:
     status: int
     headers: object
 
+
+def _unique_object_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        result[key] = value
+    return result
+
 def _credential_from_file(path):
     data = json.loads(pathlib.Path(path).read_text())
     for key in ("secret", "key", "token", "access_token"):
@@ -82,7 +91,7 @@ def request_with_meta(path, method="GET", payload=None, auth=False, headers=None
     )
     with urllib.request.urlopen(req, timeout=20) as response:
         return HttpResponse(
-            data=json.load(response),
+            data=json.load(response, object_pairs_hook=_unique_object_pairs),
             status=int(getattr(response, "status", 200)),
             headers=response.headers,
         )
