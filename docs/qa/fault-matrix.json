@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "scope": "known operational failure semantics",
+  "rows": [
+    {
+      "id": "pre_write_local_failure",
+      "phase": "pre_request",
+      "expected": "BLOCKED; zero remote mutation",
+      "detector": "tests/test_fault_matrix.py"
+    },
+    {
+      "id": "ambiguous_write_outcome",
+      "phase": "after_request_unknown",
+      "expected": "RECOVERABLE; no automatic replay; route provenance retained",
+      "detector": "tests/test_fault_matrix.py"
+    },
+    {
+      "id": "post_write_local_persistence_failure",
+      "phase": "after_request_before_local_completion",
+      "expected": "RECOVERABLE; ledger remains ATTEMPTED; no readback/replay",
+      "detector": "tests/test_fault_matrix.py"
+    },
+    {
+      "id": "readback_unavailable",
+      "phase": "readback",
+      "expected": "RECOVERABLE/unknown; exact read only; no replay",
+      "detector": "tests/test_fault_matrix.py"
+    },
+    {
+      "id": "contradictory_readback",
+      "phase": "readback",
+      "expected": "durable contradiction evidence; unresolved state",
+      "detector": "tests/test_fault_matrix.py"
+    },
+    {
+      "id": "shared_edge_429",
+      "phase": "safe_read",
+      "expected": "one request; no automatic peer fallback; backoff evidence",
+      "detector": "tests/test_fault_matrix.py"
+    },
+    {
+      "id": "stale_external_currentness",
+      "phase": "external_currentness",
+      "expected": "DRIFT_DETECTED/REVIEW_REQUIRED/UNAVAILABLE; never silently VERIFIED",
+      "detector": "tests/test_currentness_witness.py"
+    }
+  ]
+}
