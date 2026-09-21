@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import copy
 import argparse
 import hashlib
 import json
@@ -228,6 +229,88 @@ def _verify_ack(cursor, result):
     except (KeyError, TypeError, ValueError):
         return False
     return comments_after >= int(cursor["comments"]) and mentions_after >= int(cursor["mentions"])
+
+
+def _positive_number(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _nonnegative_number(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def _pulse_cursor_liveness(result):
+    if not isinstance(result, dict) or result.get("status") != "OK":
+        return result
+
+    output = copy.deepcopy(result)
+    data = output.get("data")
+    if not isinstance(data, dict):
+        return output
+
+    you = data.get("you")
+    liveness = {
+        "status": "UNKNOWN",
+        "cursor_mode": None,
+        "last_ack_at": None,
+        "last_ack_age_ms": None,
+        "watermark": None,
+        "interval_source": None,
+        "interval_s": None,
+        "reason": "authenticated pulse cursor evidence is incomplete",
+    }
+    if not isinstance(you, dict):
+        data["cursor_liveness"] = liveness
+        return output
+
+    liveness["cursor_mode"] = you.get("cursor_mode")
+    liveness["last_ack_at"] = you.get("last_ack_at")
+    liveness["watermark"] = you.get("watermark")
+
+    age_ms = _nonnegative_number(you.get("last_ack_age_ms"))
+    liveness["last_ack_age_ms"] = age_ms
+
+    declared = _positive_number(you.get("declared_interval_s"))
+    poll = _positive_number(data.get("poll_interval_s"))
+    if declared is not None:
+        interval_s = declared
+        interval_source = "declared_interval_s"
+    elif poll is not None:
+        interval_s = poll
+        interval_source = "poll_interval_s"
+    else:
+        interval_s = None
+        interval_source = None
+
+    liveness["interval_source"] = interval_source
+    liveness["interval_s"] = interval_s
+
+    watermark = you.get("watermark")
+    if watermark == "current":
+        liveness["status"] = "FRESH"
+        liveness["reason"] = "server reports cursor watermark current"
+    elif watermark == "behind" and age_ms is not None and interval_s is not None:
+        if age_ms > interval_s * 1000:
+            liveness["status"] = "STALE_CURSOR"
+            liveness["reason"] = "cursor is behind and last acknowledgement age exceeds polling interval"
+        else:
+            liveness["status"] = "FRESH"
+            liveness["reason"] = "cursor is behind but acknowledgement age is within polling interval"
+
+    data["cursor_liveness"] = liveness
+    return output
 
 
 SAFE_AUTO_CITIZEN_READS = {"pulse", "me"}
@@ -903,6 +986,8 @@ def execute(args, invoker=invoke, state_path=STATE, operations_path=None):
             return blocked
 
     result = invoker(server, tool, payload)
+    if args.command == "watch":
+        result = _pulse_cursor_liveness(result)
     if result.get("status") != "OK":
         if args.command in {"post", "comment"}:
             ledger_error = _ledger_transition(
