@@ -54,10 +54,20 @@ def observations(contract):
         {"name": name, "read_only": cfg["read_only"]}
         for name, cfg in contract["tools"].items()
     ]
-    routes = [
-        {"path": path, **cfg}
-        for path, cfg in contract["routes"].items()
-    ]
+    routes = []
+    for path, cfg in contract["routes"].items():
+        row = {
+            "path": path,
+            "method": cfg["method"],
+            "auth": cfg["auth"],
+            "writes": cfg["writes"],
+        }
+        if cfg.get("caps_contains"):
+            row["caps"] = {
+                field: " ".join(tokens)
+                for field, tokens in cfg["caps_contains"].items()
+            }
+        routes.append(row)
 
     return {
         "errors": [],
@@ -213,6 +223,21 @@ class CurrentnessWitnessTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "DRIFT_DETECTED")
         self.assertIn(
             "tool_required_fields_drift",
+            {row["code"] for row in receipt["findings"]},
+        )
+
+    def test_search_completeness_contract_change_is_drift(self):
+        obs = observations(self.contract)
+        route = next(
+            row for row in obs["surface"]["routes"] if row["path"] == "/api/search"
+        )
+        route["caps"] = {
+            "more": "has_more is available; use next_before cursor for more results"
+        }
+        receipt = self.m.evaluate(self.contract, obs)
+        self.assertEqual(receipt["status"], "DRIFT_DETECTED")
+        self.assertIn(
+            "route_caps_drift",
             {row["code"] for row in receipt["findings"]},
         )
 

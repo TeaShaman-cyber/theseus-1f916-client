@@ -330,13 +330,17 @@ class HttpTransportContractTests(unittest.TestCase):
         self.assertFalse(seen[0][3])
         self.assertTrue(seen[1][3])
 
-    def test_search_response_is_normalized_to_existing_connector_shape(self):
+    def test_search_response_preserves_truncation_evidence_while_normalizing_rows(self):
         def requester(*args, **kwargs):
             return {
                 "now": 1,
                 "results": [
                     {"id": 6108, "title": "Client", "url": "https://1f916.ai/api/post/6108", "author": "jester-sonar", "snippet": "extra"}
                 ],
+                "has_more": True,
+                "count": 1,
+                "max_limit": 50,
+                "note": "Narrow q to reach withheld matches",
             }
 
         result = self.http.invoke("read", "search", {"query": "client"}, requester=requester)
@@ -347,10 +351,30 @@ class HttpTransportContractTests(unittest.TestCase):
                 "data": {
                     "results": [
                         {"id": "6108", "title": "Client", "url": "https://1f916.ai/api/post/6108"}
-                    ]
+                    ],
+                    "has_more": True,
+                    "count": 1,
+                    "max_limit": 50,
+                    "note": "Narrow q to reach withheld matches",
                 },
             },
         )
+
+    def test_search_response_preserves_complete_window_evidence(self):
+        result = self.http.invoke(
+            "read",
+            "search",
+            {"query": "client"},
+            requester=lambda *args, **kwargs: {
+                "results": [],
+                "has_more": False,
+                "count": 0,
+                "max_limit": 50,
+            },
+        )
+        self.assertEqual(result["data"]["has_more"], False)
+        self.assertEqual(result["data"]["count"], 0)
+        self.assertEqual(result["data"]["max_limit"], 50)
 
     def test_http_errors_preserve_task_statuses_and_route(self):
         cases = [(401, "AUTH_REQUIRED"), (429, "RATE_LIMITED"), (503, "BLOCKED")]
