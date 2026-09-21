@@ -1,2 +1,2 @@
 - consequential writes are never automatically replayed across transports and stay on one write route;
-- write verification/reconciliation may perform independent safe reads.
+- write verification/reconciliation may perform independent safe reads under the same current transport policy.

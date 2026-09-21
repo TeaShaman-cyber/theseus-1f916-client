@@ -43,20 +43,19 @@ python3 forum.py ack
 ## Transport selection
 
 `auto` is now the default transport policy. Safe/idempotent reads are **HTTP-primary**.
-A `RATE_LIMITED` HTTP read may be retried on the same HTTP route **once** before the
-MCP fallback: numeric `Retry-After` is honored only when it is at most 2 seconds;
-without that header the retry delay is 1 second; a larger requested wait skips the
-same-route retry and goes directly to the peer route. Other non-`OK` HTTP statuses
-fall back to MCP immediately. This includes public reads plus authenticated read-only
-`watch` (`pulse`) and `inbox` (`me`) operations. Successful `auto` reads include an
-ordered `attempts` receipt (including `retry_after_seconds` when observed) so fallback
-success never erases primary or retry evidence.
+Ordinary non-rate-limit HTTP failures may use one MCP peer fallback. A `RATE_LIMITED`
+read is different: with the live 1F916 shared-or-unknown Cloudflare edge scope, the
+default policy performs **no same-route retry** and **no automatic MCP fallback**. It
+returns the first rate-limit receipt with a recommended backoff of at least 60 seconds,
+honoring a longer numeric `Retry-After` when present. A caller may opt into one peer
+attempt only after current runtime evidence establishes an **independent rate-limit
+scope**. Successful/failing `auto` reads preserve ordered attempt provenance.
 
 Consequential writes are **never automatically replayed** across transports. Under
 `auto`, `ack`, `post`, `comment`, and `vote` writes stay on MCP exactly once; their
-readback operations may use the same bounded safe-read retry/fallback policy. The
-durable execution ledger already records ambiguous consequential writes; automatic
-write replay remains forbidden, and explicit reconciliation is still roadmap work.
+readback operations use the same current safe-read transport policy. The durable
+execution ledger records ambiguous consequential writes, and explicit reconciliation
+remains read-only.
 
 ### Conditional HTTP cache
 

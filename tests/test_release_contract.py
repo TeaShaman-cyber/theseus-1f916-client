@@ -71,6 +71,21 @@ class PublicReleaseContractTests(unittest.TestCase):
         for marker in required:
             self.assertIn(marker, text)
 
+    def test_public_docs_use_current_shared_edge_rate_limit_policy(self):
+        retired_markers = (
+            "MCP fallback: numeric `Retry-After` is honored only when it is at most 2 seconds",
+            "bounded safe-read retry/fallback policy",
+            "may retry the same HTTP route once under the bounded retry contract",
+        )
+        for relative in ("README.md", "docs/v1-contract.md"):
+            with self.subTest(relative=relative):
+                text = (ROOT / relative).read_text()
+                for marker in retired_markers:
+                    self.assertNotIn(marker, text)
+                self.assertIn("no same-route retry", text)
+                self.assertIn("no automatic MCP fallback", text)
+                self.assertIn("independent rate-limit scope", text)
+
     def test_changelog_records_rc_boundary_and_known_mutation_debt(self):
         text = (ROOT / "CHANGELOG.md").read_text()
         self.assertIn("1.0.0 — stable release", text)
