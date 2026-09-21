@@ -17,7 +17,7 @@ jobs:
   trace:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - name: Checkout candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -27,6 +27,7 @@ jobs:
           persist-credentials: false
 
       - name: Prepare bounded trace input
+        id: input
         shell: bash
         run: |
           set -euo pipefail
@@ -41,12 +42,28 @@ jobs:
             head="$(git rev-parse HEAD)"
             task="manual-${{ github.run_id }}"
           fi
+          cache_key="semdup-db-v1-ubuntu24-schema3-src829f90ad-coderankembed-int4-$base"
           python3 tools/semantic_qa/trace_input.py             --base "$base"             --head "$head"             --output "$out"             --repository "${{ github.repository }}"             --task-id "$task"             --max-files "$(jq -r '.input_budget.max_files' "$profile")"             --max-total-bytes "$(jq -r '.input_budget.max_total_bytes' "$profile")"             --max-file-bytes "$(jq -r '.input_budget.max_file_bytes' "$profile")"
           {
             echo "SEMANTIC_BASE=$base"
             echo "SEMANTIC_HEAD=$head"
             echo "SEMANTIC_TASK=$task"
+            echo "base=$base"
+            echo "cache_key=$cache_key"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "SEMANTIC_BASE=$base"
+            echo "SEMANTIC_HEAD=$head"
+            echo "SEMANTIC_TASK=$task"
           } >> "$GITHUB_ENV"
+
+      - name: Restore exact-base semdup DB
+        id: db-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: .semdup/cache
+          key: ${{ steps.input.outputs.cache_key }}
+          fail-on-cache-miss: false
 
       - name: Run packaged semdup advisory
         shell: bash
@@ -57,38 +74,30 @@ jobs:
           out="$RUNNER_TEMP/semantic-semdup"
           input="$RUNNER_TEMP/semantic-input"
           mkdir -p "$out"
-          python3 tools/semantic_qa/run_semdup_advisory.py             --repo .             --base-sha "$SEMANTIC_BASE"             --candidate-sha "$SEMANTIC_HEAD"             --repository "${{ github.repository }}"             --task-id "$SEMANTIC_TASK"             --profile tools/semantic_qa/profile.json             --input-manifest "$input/input-manifest.json"             --output-dir "$out"             --download-dir "$RUNNER_TEMP/semdup-package-download"             --runtime-dir "$RUNNER_TEMP/semdup-runtime"
-          rc=$?
-          if [ "$rc" -ne 0 ] || [ ! -f "$out/receipt.json" ]; then
-            cat > "$out/receipt.json" <<EOF
-          {
-            "schema_version": 1,
-            "tool": "semdup",
-            "status": "UNAVAILABLE",
-            "repository": "${{ github.repository }}",
-            "task_id": "$SEMANTIC_TASK",
-            "base_sha": "$SEMANTIC_BASE",
-            "candidate_sha": "$SEMANTIC_HEAD",
-            "reason": "orchestration_failed",
-            "acceptance_authority": false
-          }
-          EOF
+          python3 tools/semantic_qa/run_semdup_advisory.py             --repo .             --base-sha "$SEMANTIC_BASE"             --candidate-sha "$SEMANTIC_HEAD"             --repository "${{ github.repository }}"             --task-id "$SEMANTIC_TASK"             --profile tools/semantic_qa/profile.json             --input-manifest "$input/input-manifest.json"             --output-dir "$out"             --download-dir "$RUNNER_TEMP/semdup-package-download"             --runtime-dir "$RUNNER_TEMP/semdup-runtime"             --db-path .semdup/cache/semdup.sqlite             --db-cache-key "${{ steps.db-cache.outputs.cache-matched-key }}"
+          if [ ! -f "$out/receipt.json" ]; then
+            printf '%s
+' '{"schema_version":1,"tool":"semdup","status":"UNAVAILABLE","reason":"orchestration_failed","acceptance_authority":false}' > "$out/receipt.json"
           fi
           status=$(jq -r '.status' "$out/receipt.json")
           freshness=$(jq -r '.toolchain.freshness.status // "CURRENTNESS_UNKNOWN"' "$out/receipt.json")
+          reason=$(jq -r '.reason // ""' "$out/receipt.json")
           setup_ms=$(jq -r '.toolchain.setup_ms // 0' "$out/receipt.json")
-          reasons=$(jq -c '.toolchain.freshness.reasons // []' "$out/receipt.json")
           if [ "$freshness" = "STALE_AVAILABLE" ] || [ "$freshness" = "CURRENTNESS_UNKNOWN" ]; then
-            echo "::warning title=semdup package freshness::$freshness $reasons"
+            echo "::warning title=semdup package freshness::$freshness"
+          fi
+          if [ "$reason" = "exact_base_db_cache_miss" ]; then
+            echo "::warning title=semdup DB cache::exact base cache missing; cold embedding skipped by policy"
           fi
           {
             echo '### semdup advisory'
             echo
             echo "- status: `$status`"
+            echo "- reason: `$reason`"
+            echo "- DB cache key: `${{ steps.db-cache.outputs.cache-matched-key }}`"
             echo "- package freshness: `$freshness`"
             echo "- package setup ms: `$setup_ms`"
             echo "- candidate: `$SEMANTIC_HEAD`"
-            echo "- task: `$SEMANTIC_TASK`"
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 

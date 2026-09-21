@@ -35,6 +35,14 @@
       "expiry_warning_days": 14,
       "git_url": "https://github.com/niklebedenko/semdup.git",
       "git_ref": "refs/heads/main"
+    },
+    "db_cache": {
+      "schema": 3,
+      "path": ".semdup/cache/semdup.sqlite",
+      "seed_metadata": ".semdup/cache/seed.json",
+      "key_prefix": "semdup-db-v1-ubuntu24-schema3-src829f90ad-coderankembed-int4",
+      "save_authority": "trusted-default-branch-push-only",
+      "pr_restore": "exact-base-sha-only"
     }
   }
 }
