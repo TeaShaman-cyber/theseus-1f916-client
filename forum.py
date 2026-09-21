@@ -9,12 +9,14 @@ import time
 
 import forum_state
 import forum_ledger
+import forum_liveness
 from client import CLIENT_VERSION
 
 ROOT = pathlib.Path(__file__).resolve().parent
 CONFIG = ROOT / "mcp.json"
 STATE = ROOT / ".forum-state.json"
 OPERATIONS = ROOT / ".forum-operations.json"
+LIVENESS = ROOT / ".forum-liveness.json"
 MCPORTER = pathlib.Path("/workspace/tools/mcporter/bin/mcporter")
 
 
@@ -678,7 +680,15 @@ def _reconcile_operation(operation_id, invoker, state_path, operations_path):
     )
 
 
-def execute(args, invoker=invoke, state_path=STATE, operations_path=None):
+def execute(
+    args,
+    invoker=invoke,
+    state_path=STATE,
+    operations_path=None,
+    liveness_path=None,
+    liveness_interval_s=None,
+    stale_after_intervals=forum_liveness.DEFAULT_STALE_AFTER_INTERVALS,
+):
     if args.command == "reconcile":
         return _reconcile_operation(
             args.operation_id,
@@ -697,8 +707,11 @@ def execute(args, invoker=invoke, state_path=STATE, operations_path=None):
 
     if args.command == "state":
         try:
-            return {"status": "OK", "data": forum_state.state_summary(state_path)}
-        except forum_state.StateError as exc:
+            data = forum_state.state_summary(state_path)
+            if liveness_path is not None:
+                data["cursor_liveness"] = forum_liveness.summary(liveness_path)
+            return {"status": "OK", "data": data}
+        except (forum_state.StateError, forum_liveness.LivenessError) as exc:
             return {"status": "BLOCKED", "error": f"could not read durable state: {exc}"}
 
     if args.command == "ack":
@@ -801,6 +814,21 @@ def execute(args, invoker=invoke, state_path=STATE, operations_path=None):
         result = {"status": "WRITE_VERIFIED", "operation": "ack", "data": written.get("data")}
         if operation_id is not None:
             result["operation_id"] = operation_id
+        if liveness_path is not None:
+            try:
+                liveness = forum_liveness.record_verified_ack(
+                    liveness_path,
+                    cursor_mode="id",
+                )
+                result["cursor_liveness"] = {
+                    "read_freshness": liveness["read_freshness"],
+                    "last_verified_ack_at_ms": liveness["last_verified_ack_at_ms"],
+                }
+            except (forum_liveness.LivenessError, OSError, ValueError) as exc:
+                result["cursor_liveness"] = {
+                    "read_freshness": "UNKNOWN",
+                    "error": f"could not persist verified ack liveness: {exc}",
+                }
         return result
 
     if args.command == "vote":
@@ -919,6 +947,29 @@ def execute(args, invoker=invoke, state_path=STATE, operations_path=None):
                 result=result,
                 ledger_error=ledger_error,
             )
+        return result
+
+    if args.command == "watch":
+        data = result.get("data") or {}
+        if liveness_path is None:
+            return result
+        try:
+            liveness = forum_liveness.observe_pulse(
+                liveness_path,
+                data,
+                configured_interval_s=liveness_interval_s,
+                stale_after_intervals=stale_after_intervals,
+            )
+            result["read_freshness"] = liveness["read_freshness"]
+            result["wake_signal_usable"] = liveness["wake_signal_usable"]
+            result["cursor_liveness"] = liveness
+        except (forum_liveness.LivenessError, OSError, ValueError) as exc:
+            result["read_freshness"] = "UNKNOWN"
+            result["wake_signal_usable"] = False
+            result["cursor_liveness"] = {
+                "read_freshness": "UNKNOWN",
+                "error": f"could not classify cursor liveness: {exc}",
+            }
         return result
 
     if args.command == "inbox":
@@ -1060,10 +1111,18 @@ def execute(args, invoker=invoke, state_path=STATE, operations_path=None):
 
 def main(argv=None):
     args = parse_args(argv)
+    configured_interval = os.environ.get("JESTER_FORUM_POLL_INTERVAL_S")
+    stale_after = os.environ.get(
+        "JESTER_FORUM_STALE_AFTER_INTERVALS",
+        str(forum_liveness.DEFAULT_STALE_AFTER_INTERVALS),
+    )
     result = execute(
         args,
         invoker=transport_invoker(args.transport),
         operations_path=OPERATIONS,
+        liveness_path=LIVENESS,
+        liveness_interval_s=configured_interval,
+        stale_after_intervals=stale_after,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("status") in {"OK", "WRITE_VERIFIED"} else 1

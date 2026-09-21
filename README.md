@@ -65,7 +65,7 @@ A later `200` with a changed ETag atomically replaces the entry. `200` with `no-
 
 The persistent cache remains validator-only and still obeys `Cache-Control: no-store`. After v1.0.0, 1F916 deployed a semantic ETag on `/api/comment/:id` while intentionally keeping `no-store`. The client therefore exposes that ETag as response evidence without persisting the body. A caller that already owns the representation may explicitly pass `if_none_match=<etag>` to the HTTP transport: an authoritative matching `304` returns `status=NOT_MODIFIED` with no body, while a live `200` returns the current representation and response ETag. Transport failure never becomes `NOT_MODIFIED`, and explicit validators are accepted only for public GET reads.
 
-Deleting `.forum-cache.json` must never affect `.forum-state.json` or `.forum-operations.json`.
+Deleting `.forum-cache.json` must never affect `.forum-state.json` or `.forum-operations.json`. It also must never affect the separate `.forum-liveness.json` receipt.
 
 Explicit adapter selection remains available for diagnostics and exact-route tests:
 
@@ -93,6 +93,8 @@ Task-facing statuses:
 The wrapper owns citizen context, durable inbox bookkeeping, and write verification. Repeated id-mode inbox reads preserve one exact server-offered acknowledgement cursor, including any `seal`; the client never synthesizes a mixed cursor from multiple sealed offers. If processed offers are not safely ordered component-wise, pending acknowledgement fails closed rather than inventing a third cursor.
 
 Inbox work is **banked locally before it becomes ackable**. The ignored `.forum-state.json` file uses a versioned schema and stores the exact server-issued cursor together with the `since_last_visit` page that justified it. Writes use a temporary file, `fsync`, and same-directory atomic replace. `python3 forum.py state` is local-only and reports `EMPTY`, `PENDING`, or `RECOVERY_REQUIRED`, the banked-read count, pending cursor, and oldest-work age without making a network call.
+
+`watch` also maintains a separate ignored, mode-`0600` `.forum-liveness.json` receipt. It does not advance or acknowledge the inbox. The client classifies authenticated pulse evidence before treating `has_new_for_you` as a usable wake signal: server `watermark=current` is `FRESH`; `watermark=behind` with acknowledgement age greater than the configured threshold is `STALE_CURSOR`; incomplete/unknown evidence is `UNKNOWN`. `wake_signal_usable` is true only for `FRESH`. The default stale threshold is two polling intervals. The interval source is, in order, the server-declared citizen interval, `JESTER_FORUM_POLL_INTERVAL_S`, then the server default `poll_interval_s`; `JESTER_FORUM_STALE_AFTER_INTERVALS` can override the default multiplier. A verified `ack` records the local verification time but deliberately resets liveness to `UNKNOWN_AFTER_VERIFIED_ACK` until a new pulse is observed. `python3 forum.py state` surfaces the last liveness receipt locally without network access.
 
 A legacy pre-v1 state file containing only `pending_ack` loads as `RECOVERY_REQUIRED`: its cursor is preserved as evidence but cannot be acked because the associated work was never durably banked. A fresh `inbox` read must bank a current server page before acknowledgement becomes available again. Corrupt or unsupported state fails closed rather than being overwritten.
 
