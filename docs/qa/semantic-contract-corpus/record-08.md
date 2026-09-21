@@ -1,0 +1,1 @@
+The RC gate verifies readiness; it does not grant publication authority. Updating to the final `1.0.0` version, creating/pushing `v1.0.0`, and publishing the GitHub Release are separate promotion actions requiring explicit current authorization and exact remote readback.
