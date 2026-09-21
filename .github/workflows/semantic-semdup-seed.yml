@@ -17,7 +17,7 @@ jobs:
   seed:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - name: Checkout trusted main
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -35,7 +35,7 @@ jobs:
           restore-keys: |
             semdup-db-v1-ubuntu24-schema3-src829f90ad-coderankembed-int4-
 
-      - name: Seed exact main DB
+      - name: Prepare exact semdup package
         if: ${{ steps.db-restore.outputs.cache-hit != 'true' }}
         shell: bash
         env:
@@ -44,8 +44,78 @@ jobs:
           set -euo pipefail
           out="$RUNNER_TEMP/semantic-semdup-seed"
           mkdir -p "$out"
-          python3 tools/semantic_qa/seed_semdup_cache.py             --repo .             --profile tools/semantic_qa/profile.json             --download-dir "$RUNNER_TEMP/semdup-package-download"             --runtime-dir "$RUNNER_TEMP/semdup-runtime"             --db-path .semdup/cache/semdup.sqlite             --output "$out/receipt.json"
-          cat "$out/receipt.json" >> "$GITHUB_STEP_SUMMARY"
+          python3 tools/semantic_qa/seed_semdup_cache.py prepare             --profile tools/semantic_qa/profile.json             --download-dir "$RUNNER_TEMP/semdup-package-download"             --runtime-dir "$RUNNER_TEMP/semdup-runtime"             --output "$out/runtime.json"
+
+      - name: Extract exact main corpus
+        if: ${{ steps.db-restore.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/semantic-semdup-seed"
+          binary=$(jq -r '.binary' "$out/runtime.json")
+          cache_dir=$(jq -r '.cache_dir' "$out/runtime.json")
+          db=.semdup/cache/semdup.sqlite
+          mkdir -p .semdup/cache
+          export SEMDUP_CACHE="$cache_dir"
+          started=$(date +%s%3N)
+          set +e
+          "$binary" --db "$db" extract             --root .             --corpus main             --respect-gitignore             --granularity function             >"$out/extract.log" 2>&1
+          rc=$?
+          set -e
+          ended=$(date +%s%3N)
+          status=PASS
+          [ "$rc" -eq 0 ] || status=FAIL
+          db_bytes=0
+          db_sha=""
+          if [ -f "$db" ]; then
+            db_bytes=$(stat -c %s "$db")
+            db_sha=$(sha256sum "$db" | awk '{print $1}')
+          fi
+          jq -n             --arg status "$status"             --argjson returncode "$rc"             --argjson elapsed_ms "$((ended-started))"             --argjson db_bytes "$db_bytes"             --arg db_sha256 "$db_sha"             '{status:$status,returncode:$returncode,elapsed_ms:$elapsed_ms,db_bytes:$db_bytes,db_sha256:$db_sha256}'             > "$out/extract.json"
+          cat "$out/extract.log"
+          exit "$rc"
+
+      - name: Embed pending main corpus
+        if: ${{ steps.db-restore.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/semantic-semdup-seed"
+          binary=$(jq -r '.binary' "$out/runtime.json")
+          cache_dir=$(jq -r '.cache_dir' "$out/runtime.json")
+          model=$(jq -r '.model_key' "$out/runtime.json")
+          db=.semdup/cache/semdup.sqlite
+          export SEMDUP_CACHE="$cache_dir"
+          started=$(date +%s%3N)
+          set +e
+          "$binary" --db "$db" embed             --model "$model"             --provider cpu             >"$out/embed.log" 2>&1
+          rc=$?
+          set -e
+          ended=$(date +%s%3N)
+          status=PASS
+          [ "$rc" -eq 0 ] || status=FAIL
+          db_bytes=$(stat -c %s "$db")
+          db_sha=$(sha256sum "$db" | awk '{print $1}')
+          jq -n             --arg status "$status"             --argjson returncode "$rc"             --argjson elapsed_ms "$((ended-started))"             --argjson db_bytes "$db_bytes"             --arg db_sha256 "$db_sha"             '{status:$status,returncode:$returncode,elapsed_ms:$elapsed_ms,db_bytes:$db_bytes,db_sha256:$db_sha256}'             > "$out/embed.json"
+          cat "$out/embed.log"
+          exit "$rc"
+
+      - name: Finalize seed receipt
+        if: ${{ steps.db-restore.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/semantic-semdup-seed"
+          python3 tools/semantic_qa/seed_semdup_cache.py finalize             --repo .             --profile tools/semantic_qa/profile.json             --db-path .semdup/cache/semdup.sqlite             --runtime "$out/runtime.json"             --phase-dir "$out"             --output "$out/receipt.json"
+          {
+            echo '### semdup trusted-main seed'
+            echo
+            jq -r '"- package setup ms: \(.package_setup_ms)"' "$out/receipt.json"
+            jq -r '"- extract ms: \(.phases.extract.elapsed_ms)"' "$out/receipt.json"
+            jq -r '"- embed ms: \(.phases.embed.elapsed_ms)"' "$out/receipt.json"
+            jq -r '"- DB bytes: \(.db_bytes)"' "$out/receipt.json"
+            jq -r '"- DB sha256: \(.db_sha256)"' "$out/receipt.json"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save exact trusted DB
         if: ${{ steps.db-restore.outputs.cache-hit != 'true' }}
@@ -54,7 +124,7 @@ jobs:
           path: .semdup/cache
           key: semdup-db-v1-ubuntu24-schema3-src829f90ad-coderankembed-int4-${{ github.sha }}
 
-      - name: Upload seed receipt
+      - name: Upload seed telemetry
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
