@@ -213,6 +213,109 @@ class ExecutionLedgerContractTests(unittest.TestCase):
                     path, "op-terminal", "unknown", now_ms=2_000
                 )
 
+    def test_mark_reconciled_verified_persists_terminal_receipt_and_retains_last_twenty(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "operations.json"
+            forum_ledger.begin_operation(
+                path,
+                operation="ack",
+                intent={"up_to": {"version": 1}},
+                now_ms=1_000,
+                operation_id="op-1",
+            )
+            forum_ledger.transition_operation(
+                path,
+                "op-1",
+                "RECOVERABLE",
+                evidence={"transport_status": "RATE_LIMITED"},
+                error="previous uncertainty",
+                now_ms=1_500,
+            )
+            for index in range(20):
+                forum_ledger.record_reconciliation(
+                    path,
+                    "op-1",
+                    "unknown" if index % 2 == 0 else "contradiction",
+                    evidence={"index": index},
+                    error=f"reason-{index}",
+                    now_ms=2_000 + index,
+                )
+
+            verified = forum_ledger.mark_reconciled_verified(
+                path,
+                "op-1",
+                evidence={"remote_verified": True, "nested": {"readback_id": 42}},
+                now_ms=5_000,
+            )
+
+            self.assertIsNotNone(verified)
+            self.assertEqual(verified["state"], "VERIFIED")
+            self.assertEqual(verified["updated_at_ms"], 5_000)
+            self.assertIsNone(verified["error"] )
+            self.assertFalse(verified["auto_replay_allowed"])
+            self.assertTrue(verified["evidence"]["remote_verified"])
+            self.assertEqual(verified["evidence"]["nested"], {"readback_id": 42})
+
+            history = verified["evidence"]["reconciliation_history"]
+            self.assertEqual(len(history), 20)
+            self.assertEqual(history[0]["evidence"]["index"], 1)
+            last = history[-1]
+            self.assertEqual(
+                last,
+                {
+                    "at_ms": 5_000,
+                    "delivery_state": "recovered_match",
+                    "evidence": {
+                        "remote_verified": True,
+                        "nested": {"readback_id": 42},
+                    },
+                    "error": None,
+                },
+            )
+
+            raw = json.loads(path.read_text())
+            self.assertEqual(raw["updated_at_ms"], 5_000)
+            persisted = raw["operations"][0]
+            self.assertEqual(persisted, verified)
+            self.assertNotIn(None, persisted["evidence"])
+            self.assertNotIn("XXreconciliation_historyXX", persisted["evidence"])
+            self.assertNotIn("RECONCILIATION_HISTORY", persisted["evidence"])
+            self.assertNotIn("XXupdated_at_msXX", persisted)
+            self.assertNotIn("UPDATED_AT_MS", persisted)
+            self.assertNotIn("XXerrorXX", persisted)
+            self.assertNotIn("ERROR", persisted)
+
+    def test_mark_reconciled_verified_unknown_operation_fails_as_ledger_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "operations.json"
+            forum_ledger.begin_operation(
+                path,
+                operation="comment",
+                intent={"post_id": 6108, "body": "hello"},
+                now_ms=1_000,
+                operation_id="op-1",
+            )
+            with self.assertRaises(forum_ledger.LedgerError):
+                forum_ledger.mark_reconciled_verified(
+                    path, "missing-op", now_ms=2_000
+                )
+
+    def test_mark_reconciled_verified_terminal_operation_fails_as_ledger_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "operations.json"
+            forum_ledger.record_blocked(
+                path,
+                operation="vote",
+                intent={"kind": "comment", "id": 71462},
+                error="precondition",
+                now_ms=1_000,
+                operation_id="op-terminal",
+            )
+            with self.assertRaises(forum_ledger.LedgerError):
+                forum_ledger.mark_reconciled_verified(
+                    path, "op-terminal", now_ms=2_000
+                )
+
     def test_ledger_failure_before_write_prevents_external_mutation(self):
         with tempfile.TemporaryDirectory() as td:
             operations = pathlib.Path(td) / "operations.json"
