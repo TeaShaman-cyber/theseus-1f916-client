@@ -85,6 +85,8 @@ class PublicReleaseContractTests(unittest.TestCase):
                 self.assertIn("no same-route retry", text)
                 self.assertIn("no automatic MCP fallback", text)
                 self.assertIn("independent rate-limit scope", text)
+                self.assertIn("at least 10 seconds", text)
+                self.assertNotIn("at least 60 seconds", text)
 
     def test_changelog_records_rc_boundary_and_known_mutation_debt(self):
         text = (ROOT / "CHANGELOG.md").read_text()

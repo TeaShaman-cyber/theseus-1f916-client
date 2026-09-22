@@ -474,6 +474,31 @@ def evaluate(contract, observations, source_sha=None):
                     missing_token=token,
                     observed=rate.get("counted_by"),
                 )
+        expected_mitigation = contract["rate_limit"].get("mitigation_seconds")
+        if expected_mitigation is not None and rate.get("mitigation_seconds") != expected_mitigation:
+            _finding(
+                findings,
+                "DRIFT",
+                "rate_limit_mitigation_drift",
+                "live edge mitigation duration changed",
+                expected=expected_mitigation,
+                observed=rate.get("mitigation_seconds"),
+            )
+        for field, finding_code, message in (
+            ("over_the_limit", "rate_limit_execution_boundary_drift", "live edge rejection no longer proves pre-execution refusal"),
+            ("note", "rate_limit_execution_boundary_drift", "live edge rejection no longer proves pre-execution refusal"),
+        ):
+            for token in contract["rate_limit"].get(f"{field}_contains", []):
+                if token not in str(rate.get(field, "")):
+                    _finding(
+                        findings,
+                        "DRIFT",
+                        finding_code,
+                        message,
+                        field=field,
+                        missing_token=token,
+                        observed=rate.get(field),
+                    )
 
     severities = {row["severity"] for row in findings}
     if "DRIFT" in severities:

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- classify authoritative pre-dispatch MCP edge 429s as terminal `NOT_EXECUTED` instead of ambiguous `RECOVERABLE`, while keeping automatic replay disabled and tracking the live 10-second edge mitigation/currentness boundary;
 - expose server ETag evidence on `no-store` public comment reads without creating a persistent body cache;
 - add explicit caller-held `If-None-Match` revalidation for public GETs, returning bodyless `NOT_MODIFIED` only on an authoritative live 304.
 

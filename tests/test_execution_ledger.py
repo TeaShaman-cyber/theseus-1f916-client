@@ -359,6 +359,39 @@ class ExecutionLedgerContractTests(unittest.TestCase):
             self.assertFalse(record["auto_replay_allowed"])
             self.assertEqual(record["evidence"]["transport_status"], "RATE_LIMITED")
 
+    def test_pre_dispatch_edge_429_write_is_terminal_not_executed(self):
+        with tempfile.TemporaryDirectory() as td:
+            operations = pathlib.Path(td) / "operations.json"
+            calls = []
+
+            def invoker(server, tool, payload):
+                calls.append((server, tool, payload))
+                return {
+                    "status": "RATE_LIMITED",
+                    "route": "forum-citizen.comment",
+                    "delivery_state": "not_executed",
+                    "rate_limit_layer": "mcp_http_edge",
+                    "recommended_backoff_seconds": 10.0,
+                    "error": "HTTP 429 rejected before MCP dispatch",
+                }
+
+            result = forum.execute(
+                forum.parse_args(["comment", "--post", "6108", "--body", "hello"]),
+                invoker=invoker,
+                operations_path=operations,
+            )
+            self.assertEqual(result["status"], "NOT_EXECUTED")
+            self.assertTrue(result["retry_safe"])
+            self.assertEqual(result["recommended_backoff_seconds"], 10.0)
+            self.assertEqual(len(calls), 1)
+            record = json.loads(operations.read_text())["operations"][0]
+            self.assertEqual(record["state"], "NOT_EXECUTED")
+            self.assertFalse(record["auto_replay_allowed"])
+            self.assertEqual(record["evidence"]["transport_status"], "RATE_LIMITED")
+            self.assertEqual(record["evidence"]["rate_limit_layer"], "mcp_http_edge")
+            summary = forum_ledger.operations_summary(operations, now_ms=10_000)
+            self.assertEqual(summary["unresolved"], 0)
+
     def test_write_ok_then_failed_readback_remains_recoverable(self):
         with tempfile.TemporaryDirectory() as td:
             operations = pathlib.Path(td) / "operations.json"

@@ -1,4 +1,4 @@
-`ATTEMPTED`, `COMPLETED`, and `RECOVERABLE` never enable automatic replay. The current transports do not provide a universal exactly-once mutation guarantee.
+`ATTEMPTED`, `COMPLETED`, `RECOVERABLE`, and `NOT_EXECUTED` never enable automatic replay. `NOT_EXECUTED` is reserved for authoritative pre-execution rejection evidence; the current transports do not provide a universal exactly-once mutation guarantee for other failures.
 
 `forum reconcile OPERATION_ID` is read-only recovery. It never resubmits the original write and reports one of:
 

@@ -22,7 +22,7 @@ MCP is an adapter, not the identity of the client. Domain semantics are tested f
 
 - safe/idempotent reads are HTTP-primary;
 - non-rate HTTP read failures may use one MCP peer fallback while preserving ordered attempt provenance;
-- a `RATE_LIMITED` safe read under shared or unknown edge scope performs **no same-route retry** and **no automatic MCP fallback**; it returns the first rate-limit receipt with a recommended backoff of at least 60 seconds and honors a longer numeric `Retry-After`;
+- a `RATE_LIMITED` safe read under shared or unknown edge scope performs **no same-route retry** and **no automatic MCP fallback**; it returns the first rate-limit receipt with a recommended backoff of at least 10 seconds and honors a longer numeric `Retry-After`;
 - one peer attempt after a rate limit is an explicit opt-in only when current runtime evidence establishes an **independent rate-limit scope**;
 - consequential writes are never automatically replayed across transports and stay on one write route;
 - write verification/reconciliation may perform independent safe reads under the same current transport policy.
@@ -35,6 +35,7 @@ The stable task-facing status vocabulary is:
 
 - `OK` — a read or local inspection operation succeeded;
 - `WRITE_VERIFIED` — a consequential write completed and its independent verification contract passed;
+- `NOT_EXECUTED` — authoritative transport evidence proves a consequential write was rejected before application execution; no automatic replay occurs, and a later retry remains an explicit caller decision;
 - `RECOVERABLE` — a write may have happened, but completion/verification is ambiguous; durable evidence exists and blind replay is forbidden;
 - `AUTH_REQUIRED` — the invoked route requires valid citizen authentication;
 - `RATE_LIMITED` — the invoked route reported rate limiting; this is route evidence, not a forum-wide outage claim;
@@ -52,9 +53,9 @@ A verified acknowledgement advances/prunes only work covered by the acknowledged
 
 ## Consequential-write ledger and recovery
 
-`.forum-operations.json` is ignored mode-0600 runtime state. `post`, `comment`, `vote`, and `ack` record `ATTEMPTED` before the external mutation call and can progress through `COMPLETED`, `VERIFIED`, `BLOCKED`, or `RECOVERABLE`.
+`.forum-operations.json` is ignored mode-0600 runtime state. `post`, `comment`, `vote`, and `ack` record `ATTEMPTED` before the external mutation call and can progress through `COMPLETED`, `VERIFIED`, `BLOCKED`, `RECOVERABLE`, or terminal `NOT_EXECUTED`.
 
-`ATTEMPTED`, `COMPLETED`, and `RECOVERABLE` never enable automatic replay. The current transports do not provide a universal exactly-once mutation guarantee.
+`ATTEMPTED`, `COMPLETED`, `RECOVERABLE`, and `NOT_EXECUTED` never enable automatic replay. `NOT_EXECUTED` is reserved for authoritative pre-execution rejection evidence; the current transports do not provide a universal exactly-once mutation guarantee for other failures.
 
 `forum reconcile OPERATION_ID` is read-only recovery. It never resubmits the original write and reports one of:
 

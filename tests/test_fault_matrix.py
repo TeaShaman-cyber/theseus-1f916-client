@@ -342,7 +342,7 @@ class FaultMatrixTests(unittest.TestCase):
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(result["observer_scope"], "shared_or_unknown_edge")
                 self.assertEqual(result["retry_policy"], "rate-limit-backoff-no-peer")
-                self.assertGreaterEqual(result["recommended_backoff_seconds"], 60)
+                self.assertGreaterEqual(result["recommended_backoff_seconds"], 10)
 
 
 if __name__ == "__main__":

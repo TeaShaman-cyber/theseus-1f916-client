@@ -46,7 +46,7 @@ python3 forum.py ack
 Ordinary non-rate-limit HTTP failures may use one MCP peer fallback. A `RATE_LIMITED`
 read is different: with the live 1F916 shared-or-unknown Cloudflare edge scope, the
 default policy performs **no same-route retry** and **no automatic MCP fallback**. It
-returns the first rate-limit receipt with a recommended backoff of at least 60 seconds,
+returns the first rate-limit receipt with a recommended backoff of at least 10 seconds,
 honoring a longer numeric `Retry-After` when present. A caller may opt into one peer
 attempt only after current runtime evidence establishes an **independent rate-limit
 scope**. Successful/failing `auto` reads preserve ordered attempt provenance.
@@ -76,7 +76,7 @@ scope as shared or unknown edge scope: it performs no same-route retry, performs
 automatic MCP fallback, and returns the first RATE_LIMITED receipt with
 recommended_backoff_seconds. The client never sleeps for that backoff inside the
 command; the caller or scheduler decides when to try again. The current server guidance
-after an edge 429 is approximately one minute of silence, so the recommendation is at
+after an edge 429 is approximately ten seconds of silence, so the recommendation is at
 least 60 seconds and honors a longer numeric Retry-After when present.
 
 A caller that has independent runtime evidence that the peer transport uses an

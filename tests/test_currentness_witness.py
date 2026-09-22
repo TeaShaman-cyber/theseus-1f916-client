@@ -135,6 +135,8 @@ def observations(contract):
                 "mitigation_seconds": 10,
                 "applies_to": "every path beginning /api/ and every path beginning /mcp",
                 "counted_by": "your IP address, per Cloudflare location",
+                "over_the_limit": "HTTP 429 from Cloudflare edge; the request never reaches the registry",
+                "note": "Enforced at the edge, before any code here runs",
             },
         },
     }
@@ -205,6 +207,8 @@ class CurrentnessWitnessTests(unittest.TestCase):
         )
         self.assertEqual(receipt["status"], "CURRENT")
         self.assertEqual(receipt["source_sha"], "b" * 40)
+        self.assertIsInstance(receipt["forum_code"], dict)
+        self.assertEqual(receipt["forum_code"]["commit"], "a" * 40)
         self.assertFalse(receipt["acceptance_authority"])
         self.assertEqual(receipt["latest_stable_mcp_protocol"], "2026-07-28")
         self.assertEqual(receipt["live_mcp_protocol"], "2025-06-18")
@@ -263,6 +267,26 @@ class CurrentnessWitnessTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "DRIFT_DETECTED")
         self.assertIn(
             "rate_limit_scope_drift",
+            {row["code"] for row in receipt["findings"]},
+        )
+
+    def test_rate_limit_mitigation_change_is_drift(self):
+        obs = observations(self.contract)
+        obs["official"]["rate_limit"]["mitigation_seconds"] = 60
+        receipt = self.m.evaluate(self.contract, obs)
+        self.assertEqual(receipt["status"], "DRIFT_DETECTED")
+        self.assertIn(
+            "rate_limit_mitigation_drift",
+            {row["code"] for row in receipt["findings"]},
+        )
+
+    def test_rate_limit_execution_boundary_change_is_drift(self):
+        obs = observations(self.contract)
+        obs["official"]["rate_limit"]["over_the_limit"] = "HTTP 429 after application dispatch"
+        receipt = self.m.evaluate(self.contract, obs)
+        self.assertEqual(receipt["status"], "DRIFT_DETECTED")
+        self.assertIn(
+            "rate_limit_execution_boundary_drift",
             {row["code"] for row in receipt["findings"]},
         )
 

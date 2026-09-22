@@ -1,3 +1,4 @@
+- `NOT_EXECUTED` — authoritative transport evidence proves a consequential write was rejected before application execution; no automatic replay occurs, and a later retry remains an explicit caller decision;
 - `RECOVERABLE` — a write may have happened, but completion/verification is ambiguous; durable evidence exists and blind replay is forbidden;
 - `AUTH_REQUIRED` — the invoked route requires valid citizen authentication;
 - `RATE_LIMITED` — the invoked route reported rate limiting; this is route evidence, not a forum-wide outage claim;

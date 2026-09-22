@@ -108,6 +108,9 @@
   },
   "rate_limit": {
     "applies_to_contains": ["/api/", "/mcp"],
-    "counted_by_contains": ["IP address", "Cloudflare location"]
+    "counted_by_contains": ["IP address", "Cloudflare location"],
+    "mitigation_seconds": 10,
+    "over_the_limit_contains": ["request never reaches the registry"],
+    "note_contains": ["before any code here runs"]
   }
 }

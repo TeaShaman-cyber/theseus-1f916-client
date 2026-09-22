@@ -18,6 +18,7 @@ STATE = ROOT / ".forum-state.json"
 OPERATIONS = ROOT / ".forum-operations.json"
 LIVENESS = ROOT / ".forum-liveness.json"
 MCPORTER = pathlib.Path("/workspace/tools/mcporter/bin/mcporter")
+RATE_LIMIT_BACKOFF_DEFAULT_SECONDS = 10.0
 
 
 def parser():
@@ -180,7 +181,28 @@ def invoke(surface, tool, payload, runner=subprocess.run, base_env=None, load_va
     )
     if run.returncode != 0:
         message = (run.stderr or run.stdout or "forum MCP call failed").strip()
-        return {"status": _failure_status(message), "route": f"{server}.{tool}", "error": message[:2000]}
+        status = _failure_status(message)
+        result = {"status": status, "route": f"{server}.{tool}", "error": message[:2000]}
+        # mcporter uses this wording when the streamable-HTTP MCP endpoint itself
+        # returned 429. 1F916's live /api/official contract states that this
+        # Cloudflare edge rejection happens before the Worker runs, and the MCP
+        # comment/post tools call the database directly rather than proxying an
+        # inner HTTP write. Keep generic RATE_LIMITED failures ambiguous; only
+        # this transport-level shape proves the consequential write did not run.
+        lowered = message.lower()
+        if (
+            status == "RATE_LIMITED"
+            and "responded with http 429" in lowered
+            and "error posting to endpoint" in lowered
+        ):
+            result.update(
+                {
+                    "delivery_state": "not_executed",
+                    "rate_limit_layer": "mcp_http_edge",
+                    "recommended_backoff_seconds": RATE_LIMIT_BACKOFF_DEFAULT_SECONDS,
+                }
+            )
+        return result
     try:
         data = json.loads(run.stdout)
     except json.JSONDecodeError as exc:
@@ -550,7 +572,6 @@ def _verify_ack(cursor, result):
 SAFE_AUTO_CITIZEN_READS = {"pulse", "me"}
 RATE_LIMIT_SCOPE_SHARED_OR_UNKNOWN = "shared_or_unknown_edge"
 RATE_LIMIT_SCOPE_INDEPENDENT_PEER = "independent_peer"
-RATE_LIMIT_BACKOFF_DEFAULT_SECONDS = 60.0
 
 
 def _is_safe_auto_read(surface, tool):
@@ -1480,11 +1501,37 @@ def execute(
     result = invoker(server, tool, payload)
     if result.get("status") != "OK":
         if args.command in {"post", "comment"}:
+            evidence = _write_evidence(result)
+            for key in ("delivery_state", "rate_limit_layer", "recommended_backoff_seconds"):
+                if key in result:
+                    evidence[key] = result[key]
+            if result.get("delivery_state") == "not_executed":
+                ledger_error = _ledger_transition(
+                    operations_path,
+                    operation_id,
+                    "NOT_EXECUTED",
+                    evidence=evidence,
+                    error=result.get("error") or f"{args.command} rejected before execution",
+                )
+                payload = {
+                    "status": "NOT_EXECUTED",
+                    "operation": args.command,
+                    "operation_id": operation_id,
+                    "transport_status": result.get("status"),
+                    "retry_safe": True,
+                    "error": result.get("error") or f"{args.command} rejected before execution",
+                }
+                for key in ("route", "rate_limit_layer", "recommended_backoff_seconds"):
+                    if key in result:
+                        payload[key] = result[key]
+                if ledger_error is not None:
+                    payload["ledger_error"] = str(ledger_error)
+                return payload
             ledger_error = _ledger_transition(
                 operations_path,
                 operation_id,
                 "RECOVERABLE",
-                evidence=_write_evidence(result),
+                evidence=evidence,
                 error=result.get("error") or f"{args.command} transport did not return OK",
             )
             return _recoverable_write(

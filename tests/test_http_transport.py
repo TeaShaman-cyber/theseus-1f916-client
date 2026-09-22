@@ -30,7 +30,7 @@ class HttpTransportContractTests(unittest.TestCase):
         self.assertIn("JESTER_FORUM_TRANSPORT=http", text)
         self.assertIn("HTTP-primary", text)
         self.assertIn("shared or unknown edge scope", text)
-        self.assertIn("one minute", text)
+        self.assertIn("ten seconds", text)
         lowered = text.lower()
         self.assertIn("consequential writes", lowered)
         self.assertIn("never automatically replayed", lowered)
@@ -127,7 +127,7 @@ class HttpTransportContractTests(unittest.TestCase):
         self.assertEqual(result["attempts"][0]["error"], "HTTP 429")
         self.assertEqual(result["observer_scope"], "shared_or_unknown_edge")
         self.assertEqual(result["retry_policy"], "rate-limit-backoff-no-peer")
-        self.assertEqual(result["recommended_backoff_seconds"], 60.0)
+        self.assertEqual(result["recommended_backoff_seconds"], 10.0)
         self.assertEqual(
             result["peer_fallback_skipped"], "shared_or_unknown_edge_scope"
         )
@@ -150,7 +150,7 @@ class HttpTransportContractTests(unittest.TestCase):
                 )
                 self.assertEqual(result["status"], "RATE_LIMITED")
                 self.assertEqual(calls, ["http"])
-                self.assertEqual(result["recommended_backoff_seconds"], 60.0)
+                self.assertEqual(result["recommended_backoff_seconds"], 10.0)
 
         for tool in ("me_ack", "post", "comment", "vote"):
             with self.subTest(tool=tool):
@@ -212,7 +212,7 @@ class HttpTransportContractTests(unittest.TestCase):
         self.assertEqual(calls, ["http"])
         self.assertEqual(sleeps, [])
         self.assertEqual(result["attempts"][0]["retry_after_seconds"], 0.25)
-        self.assertEqual(result["recommended_backoff_seconds"], 60.0)
+        self.assertEqual(result["recommended_backoff_seconds"], 10.0)
 
     def test_auto_rate_limit_honors_longer_retry_after_without_sleeping(self):
         calls = []
@@ -264,7 +264,7 @@ class HttpTransportContractTests(unittest.TestCase):
         )
         self.assertEqual(result["observer_scope"], "independent_peer")
         self.assertEqual(result["retry_policy"], "independent-peer-on-rate-limit")
-        self.assertEqual(result["primary_recommended_backoff_seconds"], 60.0)
+        self.assertEqual(result["primary_recommended_backoff_seconds"], 10.0)
 
     def test_auto_rejects_unknown_rate_limit_scope(self):
         with self.assertRaisesRegex(ValueError, "unsupported rate_limit_scope"):

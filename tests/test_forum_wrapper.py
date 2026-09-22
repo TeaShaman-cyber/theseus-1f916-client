@@ -198,6 +198,24 @@ class ForumInvocationTests(unittest.TestCase):
                 )
                 self.assertEqual(result["status"], expected)
 
+    def test_mcp_http_429_is_typed_as_pre_dispatch_not_executed(self):
+        message = (
+            "[mcporter] forum-citizen.comment responded with HTTP 429 "
+            "(Error POSTing to endpoint: {\"type\":\"https://developers.cloudflare.com/"
+            "support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1015/\"})"
+        )
+
+        def runner(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr=message)
+
+        result = self.forum.invoke(
+            "citizen", "comment", {"post_id": 5057, "body": "hello"}, runner=runner, base_env={}
+        )
+        self.assertEqual(result["status"], "RATE_LIMITED")
+        self.assertEqual(result["delivery_state"], "not_executed")
+        self.assertEqual(result["rate_limit_layer"], "mcp_http_edge")
+        self.assertEqual(result["recommended_backoff_seconds"], 10.0)
+
 class ForumExecutionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

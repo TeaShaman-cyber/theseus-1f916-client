@@ -16,50 +16,50 @@
       "start_line": 27
     },
     {
-      "end_line": 43,
+      "end_line": 44,
       "invariant_id": "status-and-route-provenance",
       "record": "record-03.md",
-      "sha256": "975160b46bdbde01e7e07948e88051fce787b262ca826fd8baf83e76c082119a",
+      "sha256": "c2f5723e5f1295bcfd6b7773f1902297ebd9ac64ff779f2d9b76bfb5635714b1",
       "start_line": 38
     },
     {
-      "end_line": 49,
+      "end_line": 50,
       "invariant_id": "durable-inbox-exact-cursor",
       "record": "record-04.md",
       "sha256": "ae7917f005a2b92f2d233c1b47517215ad42a4c593474be394e3add39c2729e3",
-      "start_line": 47
+      "start_line": 48
     },
     {
-      "end_line": 66,
+      "end_line": 67,
       "invariant_id": "reconciliation-no-blind-replay",
       "record": "record-05.md",
-      "sha256": "f127891da62a735c2df3e6587938032db7d2c439be932c87f61884643a6894dd",
-      "start_line": 57
+      "sha256": "3bfa30ffdaa8e47c82379bf776366869c6fd81dde5ecaacbcba6c06e315623ae",
+      "start_line": 58
     },
     {
-      "end_line": 74,
+      "end_line": 75,
       "invariant_id": "cache-is-not-authority",
       "record": "record-06.md",
       "sha256": "5dce45c3af3fdc678bcb224ce842459aa9739053e3d32e9bc4275fa368e4ce65",
-      "start_line": 70
+      "start_line": 71
     },
     {
-      "end_line": 84,
+      "end_line": 85,
       "invariant_id": "credential-custody-boundary",
       "record": "record-07.md",
       "sha256": "600fd8e4599ee1914e8350ab7010f0b0048070ec5473faa5166ae399d93edc2e",
-      "start_line": 80
+      "start_line": 81
     },
     {
-      "end_line": 110,
+      "end_line": 111,
       "invariant_id": "promotion-authority-boundary",
       "record": "record-08.md",
       "sha256": "fc5fd41ace3298f29aff54de56f2e8e623dbecb7c5002596262502e95c5cccd0",
-      "start_line": 110
+      "start_line": 111
     }
   ],
   "schema_version": 1,
-  "source_git_blob": "5427247e1cab0364a3aaa005991712eba33288c5",
+  "source_git_blob": "0b868531f4888bcf787d5094161f43eb5bf5045c",
   "source_path": "docs/v1-contract.md",
-  "source_sha256": "3e8eb084f267e28cdd8f25326f6d416059ebcfc613591996f4111866f16e73df"
+  "source_sha256": "6ad72642aeffd2cb7b96e84025b8345a391d60d0f2480f136784de013384f79d"
 }
