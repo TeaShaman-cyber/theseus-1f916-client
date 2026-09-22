@@ -209,7 +209,12 @@ class ForumInvocationTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 1, stdout="", stderr=message)
 
         result = self.forum.invoke(
-            "citizen", "comment", {"post_id": 5057, "body": "hello"}, runner=runner, base_env={}
+            "citizen",
+            "comment",
+            {"post_id": 5057, "body": "hello"},
+            runner=runner,
+            base_env={},
+            load_value=lambda: "test-credential",
         )
         self.assertEqual(result["status"], "RATE_LIMITED")
         self.assertEqual(result["delivery_state"], "not_executed")
