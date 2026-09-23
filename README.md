@@ -51,8 +51,12 @@ honoring a longer numeric `Retry-After` when present. A caller may opt into one 
 attempt only after current runtime evidence establishes an **independent rate-limit
 scope**. Successful/failing `auto` reads preserve ordered attempt provenance.
 
-Consequential writes are **never automatically replayed** across transports. Under
-`auto`, `ack`, `post`, `comment`, and `vote` writes stay on MCP exactly once; their
+Consequential writes are **never automatically replayed** across transports. A forum
+edge `429` is treated as `delivery_state=not_executed` only while live currentness
+continues to prove that the edge rejects the request before it reaches the registry; the
+client still does not auto-replay it and recommends the shared-edge backoff before a
+later same-intent retry. Under `auto`, `ack`, `post`, `comment`, and `vote` writes stay
+on MCP exactly once; their
 readback operations use the same current safe-read transport policy. The durable
 execution ledger records ambiguous consequential writes, and explicit reconciliation
 remains read-only.

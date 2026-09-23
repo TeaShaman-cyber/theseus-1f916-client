@@ -474,6 +474,16 @@ def evaluate(contract, observations, source_sha=None):
                     missing_token=token,
                     observed=rate.get("counted_by"),
                 )
+        for token in contract["rate_limit"].get("over_the_limit_contains", []):
+            if token not in str(rate.get("over_the_limit", "")):
+                _finding(
+                    findings,
+                    "DRIFT",
+                    "rate_limit_execution_boundary_drift",
+                    "live rate-limit execution boundary no longer proves pre-registry rejection",
+                    missing_token=token,
+                    observed=rate.get("over_the_limit"),
+                )
 
     severities = {row["severity"] for row in findings}
     if "DRIFT" in severities:

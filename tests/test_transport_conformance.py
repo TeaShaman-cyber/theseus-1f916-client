@@ -286,16 +286,31 @@ class CrossTransportWriteConformanceTests(unittest.TestCase):
         self.assertEqual(projections[0], projections[1])
         self.assertEqual(projections[0], ("WRITE_VERIFIED", "comment", 4000))
 
-    def test_comment_ambiguous_write_is_recoverable_once_on_both_transports(self):
+    def test_comment_edge_429_is_not_executed_once_on_both_transports(self):
         pair = self._run_pair(
             ["comment", "--post", "6108", "--body", "hello"],
             [("POST", "/api/comment", http_error(429))],
             [("forum-citizen.comment", RuntimeError("429 rate limit"))],
         )
         for label, result, backend, _state_exists, ledger in pair:
+            self.assertEqual(result["status"], "RATE_LIMITED", label)
+            self.assertEqual(result["operation"], "comment")
+            self.assertEqual(result["delivery_state"], "not_executed")
+            self.assertEqual(result["recommended_backoff_seconds"], 60.0)
+            self.assertEqual(len(backend.calls), 1)
+            self.assertEqual(ledger["operations"][0]["state"], "BLOCKED")
+            self.assertFalse(ledger["operations"][0]["auto_replay_allowed"])
+
+    def test_comment_non_rate_limit_write_failure_remains_recoverable(self):
+        pair = self._run_pair(
+            ["comment", "--post", "6108", "--body", "hello"],
+            [("POST", "/api/comment", http_error(503))],
+            [("forum-citizen.comment", RuntimeError("503 upstream unavailable"))],
+        )
+        for label, result, backend, _state_exists, ledger in pair:
             self.assertEqual(result["status"], "RECOVERABLE", label)
             self.assertEqual(result["operation"], "comment")
-            self.assertEqual(result["transport_status"], "RATE_LIMITED")
+            self.assertEqual(result["transport_status"], "BLOCKED")
             self.assertEqual(len(backend.calls), 1)
             self.assertEqual(ledger["operations"][0]["state"], "RECOVERABLE")
             self.assertFalse(ledger["operations"][0]["auto_replay_allowed"])

@@ -84,9 +84,9 @@ class ScriptedFaultInvoker:
         if tool == self.spec.write_tool:
             if self.fault == "ambiguous_write_outcome":
                 return {
-                    "status": "RATE_LIMITED",
+                    "status": "BLOCKED",
                     "route": route,
-                    "error": "simulated ambiguous 429",
+                    "error": "simulated post-dispatch transport failure",
                 }
             return self.spec.write_result()
 
@@ -136,7 +136,7 @@ class FaultMatrixTests(unittest.TestCase):
         cases = {
             "ambiguous_write_outcome": {
                 "calls": 1,
-                "transport_status": "RATE_LIMITED",
+                "transport_status": "BLOCKED",
             },
             "readback_unavailable": {
                 "calls": 2,

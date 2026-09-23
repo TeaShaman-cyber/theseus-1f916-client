@@ -34,8 +34,8 @@
     },
     {
       "id": "shared_edge_429",
-      "phase": "safe_read",
-      "expected": "one request; no automatic peer fallback; backoff evidence",
+      "phase": "safe_read_or_pre_registry_write",
+      "expected": "safe read: one request/no automatic peer fallback/backoff evidence; write: terminal not_executed/no automatic replay/backoff evidence",
       "detector": "tests/test_fault_matrix.py"
     },
     {

@@ -1479,6 +1479,34 @@ def execute(
 
     result = invoker(server, tool, payload)
     if result.get("status") != "OK":
+        if args.command in {"post", "comment"} and result.get("status") == "RATE_LIMITED":
+            backoff = _rate_limit_backoff_seconds(result)
+            evidence = {
+                **_write_evidence(result),
+                "delivery_state": "not_executed",
+                "recommended_backoff_seconds": backoff,
+            }
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "BLOCKED",
+                evidence=evidence,
+                error=result.get("error") or "edge rate limit rejected write before registry execution",
+            )
+            payload_out = {
+                "status": "RATE_LIMITED",
+                "operation": args.command,
+                "delivery_state": "not_executed",
+                "recommended_backoff_seconds": backoff,
+                "error": result.get("error") or "edge rate limit rejected write before registry execution",
+            }
+            if operation_id is not None:
+                payload_out["operation_id"] = operation_id
+            if isinstance(result.get("route"), str):
+                payload_out["route"] = result["route"]
+            if ledger_error is not None:
+                payload_out["ledger_error"] = str(ledger_error)
+            return payload_out
         if args.command in {"post", "comment"}:
             ledger_error = _ledger_transition(
                 operations_path,

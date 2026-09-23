@@ -333,7 +333,7 @@ class ExecutionLedgerContractTests(unittest.TestCase):
             self.assertIn("before write", result["error"])
             self.assertEqual(calls, [])
 
-    def test_non_ok_write_response_becomes_recoverable_and_is_not_retried(self):
+    def test_edge_rate_limited_write_is_not_executed_and_is_not_retried(self):
         with tempfile.TemporaryDirectory() as td:
             operations = pathlib.Path(td) / "operations.json"
             calls = []
@@ -351,13 +351,16 @@ class ExecutionLedgerContractTests(unittest.TestCase):
                 invoker=invoker,
                 operations_path=operations,
             )
-            self.assertEqual(result["status"], "RECOVERABLE")
+            self.assertEqual(result["status"], "RATE_LIMITED")
+            self.assertEqual(result["delivery_state"], "not_executed")
+            self.assertEqual(result["recommended_backoff_seconds"], 60.0)
             self.assertEqual(len(calls), 1)
             raw = json.loads(operations.read_text())
             record = raw["operations"][0]
-            self.assertEqual(record["state"], "RECOVERABLE")
+            self.assertEqual(record["state"], "BLOCKED")
             self.assertFalse(record["auto_replay_allowed"])
             self.assertEqual(record["evidence"]["transport_status"], "RATE_LIMITED")
+            self.assertEqual(record["evidence"]["delivery_state"], "not_executed")
 
     def test_write_ok_then_failed_readback_remains_recoverable(self):
         with tempfile.TemporaryDirectory() as td:
