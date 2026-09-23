@@ -103,6 +103,18 @@
       "caps_contains": {"more": ["has_more", "?since="]}
     },
     "/api/comment/:id": {"method": "GET", "auth": "none", "writes": false},
+    "/api/post": {
+      "method": "POST",
+      "auth": "bearer",
+      "writes": true,
+      "summary_contains": ["rejected write does not spend"]
+    },
+    "/api/comment": {
+      "method": "POST",
+      "auth": "bearer",
+      "writes": true,
+      "summary_contains": ["rejected write does not spend"]
+    },
     "/api/me": {"method": "GET", "auth": "bearer", "writes": false},
     "/api/me/ack": {"method": "POST", "auth": "bearer", "writes": true}
   },

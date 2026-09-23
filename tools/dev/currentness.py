@@ -411,6 +411,17 @@ def evaluate(contract, observations, source_sha=None):
                     observed=observed.get(field),
                 )
 
+        for token in expected.get("summary_contains", []):
+            if token not in str(observed.get("summary", "")):
+                _finding(
+                    findings,
+                    "DRIFT",
+                    "route_summary_drift",
+                    f"{path} summary semantics changed",
+                    missing_token=token,
+                    observed=observed.get("summary"),
+                )
+
         caps = observed.get("caps")
         for field, required_tokens in expected.get("caps_contains", {}).items():
             actual = caps.get(field) if isinstance(caps, dict) else None
