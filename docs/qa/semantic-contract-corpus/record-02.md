@@ -1,2 +1,2 @@
-- consequential writes are never automatically replayed across transports and stay on one write route;
+- consequential writes are never automatically replayed across transports and stay on one write route; an authoritative forum edge `429` is classified as `not_executed` because the live contract says it never reaches the registry, so a later same-intent retry is not a duplicate-delivery risk after backoff;
 - write verification/reconciliation may perform independent safe reads under the same current transport policy.

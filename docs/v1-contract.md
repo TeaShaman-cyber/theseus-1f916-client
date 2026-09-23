@@ -24,7 +24,7 @@ MCP is an adapter, not the identity of the client. Domain semantics are tested f
 - non-rate HTTP read failures may use one MCP peer fallback while preserving ordered attempt provenance;
 - a `RATE_LIMITED` safe read under shared or unknown edge scope performs **no same-route retry** and **no automatic MCP fallback**; it returns the first rate-limit receipt with a recommended backoff of at least 60 seconds and honors a longer numeric `Retry-After`;
 - one peer attempt after a rate limit is an explicit opt-in only when current runtime evidence establishes an **independent rate-limit scope**;
-- consequential writes are never automatically replayed across transports and stay on one write route;
+- consequential writes are never automatically replayed across transports and stay on one write route; an authoritative forum edge `429` is classified as `not_executed` because the live contract says it never reaches the registry, so a later same-intent retry is not a duplicate-delivery risk after backoff;
 - write verification/reconciliation may perform independent safe reads under the same current transport policy.
 
 Explicit `--transport http` and `--transport mcp` are exact-route diagnostic modes and do not automatically fall back to the peer transport.

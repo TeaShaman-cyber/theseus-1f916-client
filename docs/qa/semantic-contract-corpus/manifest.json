@@ -12,7 +12,7 @@
       "end_line": 28,
       "invariant_id": "write-route-no-auto-replay",
       "record": "record-02.md",
-      "sha256": "fc480bb84a158227e219049697b2df83fce0c2d4139065ddca032bc4b8dbf5d5",
+      "sha256": "8e210f5964159e7ee3532b207402be80cf89d4806d7e4d0292c622cfec07fe75",
       "start_line": 27
     },
     {
@@ -59,7 +59,7 @@
     }
   ],
   "schema_version": 1,
-  "source_git_blob": "5427247e1cab0364a3aaa005991712eba33288c5",
+  "source_git_blob": "3c5f7e06c0516cfcd47c5b86c47dbb6746000873",
   "source_path": "docs/v1-contract.md",
-  "source_sha256": "3e8eb084f267e28cdd8f25326f6d416059ebcfc613591996f4111866f16e73df"
+  "source_sha256": "731e3d618dc231e67fd8ceb107f82f4a1f464114de38dc70fee8fdeb677990d7"
 }

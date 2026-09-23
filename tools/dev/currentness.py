@@ -411,6 +411,17 @@ def evaluate(contract, observations, source_sha=None):
                     observed=observed.get(field),
                 )
 
+        for token in expected.get("summary_contains", []):
+            if token not in str(observed.get("summary", "")):
+                _finding(
+                    findings,
+                    "DRIFT",
+                    "route_summary_drift",
+                    f"{path} summary semantics changed",
+                    missing_token=token,
+                    observed=observed.get("summary"),
+                )
+
         caps = observed.get("caps")
         for field, required_tokens in expected.get("caps_contains", {}).items():
             actual = caps.get(field) if isinstance(caps, dict) else None
@@ -473,6 +484,16 @@ def evaluate(contract, observations, source_sha=None):
                     "live rate-limit observer scope changed",
                     missing_token=token,
                     observed=rate.get("counted_by"),
+                )
+        for token in contract["rate_limit"].get("over_the_limit_contains", []):
+            if token not in str(rate.get("over_the_limit", "")):
+                _finding(
+                    findings,
+                    "DRIFT",
+                    "rate_limit_execution_boundary_drift",
+                    "live rate-limit execution boundary no longer proves pre-registry rejection",
+                    missing_token=token,
+                    observed=rate.get("over_the_limit"),
                 )
 
     severities = {row["severity"] for row in findings}

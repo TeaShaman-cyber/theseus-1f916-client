@@ -62,6 +62,8 @@ def observations(contract):
             "auth": cfg["auth"],
             "writes": cfg["writes"],
         }
+        if cfg.get("summary_contains"):
+            row["summary"] = " ".join(cfg["summary_contains"])
         if cfg.get("caps_contains"):
             row["caps"] = {
                 field: " ".join(tokens)
@@ -135,6 +137,7 @@ def observations(contract):
                 "mitigation_seconds": 10,
                 "applies_to": "every path beginning /api/ and every path beginning /mcp",
                 "counted_by": "your IP address, per Cloudflare location",
+                "over_the_limit": "HTTP 429 from Cloudflare edge; the request never reaches the registry",
             },
         },
     }
@@ -263,6 +266,24 @@ class CurrentnessWitnessTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "DRIFT_DETECTED")
         self.assertIn(
             "rate_limit_scope_drift",
+            {row["code"] for row in receipt["findings"]},
+        )
+
+    def test_write_rejection_semantics_change_is_drift(self):
+        obs = observations(self.contract)
+        route = next(row for row in obs["surface"]["routes"] if row["path"] == "/api/comment")
+        route["summary"] = "Publish a comment. Capped per UTC day."
+        receipt = self.m.evaluate(self.contract, obs)
+        self.assertEqual(receipt["status"], "DRIFT_DETECTED")
+        self.assertIn("route_summary_drift", {row["code"] for row in receipt["findings"]})
+
+    def test_rate_limit_pre_execution_contract_change_is_drift(self):
+        obs = observations(self.contract)
+        obs["official"]["rate_limit"]["over_the_limit"] = "HTTP 429 with unknown execution boundary"
+        receipt = self.m.evaluate(self.contract, obs)
+        self.assertEqual(receipt["status"], "DRIFT_DETECTED")
+        self.assertIn(
+            "rate_limit_execution_boundary_drift",
             {row["code"] for row in receipt["findings"]},
         )
 

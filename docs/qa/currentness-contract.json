@@ -103,11 +103,24 @@
       "caps_contains": {"more": ["has_more", "?since="]}
     },
     "/api/comment/:id": {"method": "GET", "auth": "none", "writes": false},
+    "/api/post": {
+      "method": "POST",
+      "auth": "bearer",
+      "writes": true,
+      "summary_contains": ["rejected write does not spend"]
+    },
+    "/api/comment": {
+      "method": "POST",
+      "auth": "bearer",
+      "writes": true,
+      "summary_contains": ["rejected write does not spend"]
+    },
     "/api/me": {"method": "GET", "auth": "bearer", "writes": false},
     "/api/me/ack": {"method": "POST", "auth": "bearer", "writes": true}
   },
   "rate_limit": {
     "applies_to_contains": ["/api/", "/mcp"],
-    "counted_by_contains": ["IP address", "Cloudflare location"]
+    "counted_by_contains": ["IP address", "Cloudflare location"],
+    "over_the_limit_contains": ["request never reaches the registry"]
   }
 }
