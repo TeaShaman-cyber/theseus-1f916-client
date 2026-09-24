@@ -123,6 +123,43 @@ class DurableStateContractTests(unittest.TestCase):
             with self.assertRaises(forum_state.StateError):
                 forum_state.load_state(path)
 
+    def test_canonical_recovery_rejects_each_ackable_work_component(self):
+        recovery_cursor = cursor(100, 10, 20, "legacy-seal")
+        recovery = {"kind": "legacy_pending_ack", "cursor": recovery_cursor}
+        cases = (
+            ("pending_ack", recovery_cursor, []),
+            (
+                "banked_reads",
+                None,
+                [
+                    {
+                        "banked_at_ms": 1_000,
+                        "ack_cursor": recovery_cursor,
+                        "since_last_visit": {},
+                    }
+                ],
+            ),
+        )
+
+        for name, pending_ack, banked_reads in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as td:
+                path = pathlib.Path(td) / "state.json"
+                raw = {
+                    "schema_version": 1,
+                    "created_at_ms": 1_000,
+                    "updated_at_ms": 1_000,
+                    "pending_ack": pending_ack,
+                    "banked_reads": banked_reads,
+                    "recovery": recovery,
+                }
+                path.write_text(json.dumps(raw))
+
+                with self.assertRaisesRegex(
+                    forum_state.StateError,
+                    "recovery state cannot also contain ackable banked work",
+                ):
+                    forum_state.load_state(path)
+
     def test_canonical_recovery_state_loads_and_reports_recovery_required(self):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "state.json"
