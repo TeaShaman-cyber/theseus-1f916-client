@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+import argparse
+import hashlib
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+DEFAULT_TARGET = pathlib.Path('/workspace/agents/jester/1f916')
+PROJECTED_FILES = (
+    'VERSION',
+    'client.py',
+    'forum_cache.py',
+    'forum_ledger.py',
+    'forum_liveness.py',
+    'forum_state.py',
+    'http_transport.py',
+    'mcp.json',
+    # Replace the entrypoint last so a concurrent invocation never sees
+    # the new wrapper before all of its dependencies are present.
+    'forum.py',
+)
+RUNTIME_ONLY = (
+    'citizen.json',
+    '.forum-state.json',
+    '.forum-operations.json',
+    '.forum-liveness.json',
+    '.forum-cache.json',
+)
+
+
+class ProjectionError(RuntimeError):
+    def __init__(self, code, message, **details):
+        super().__init__(message)
+        self.code = code
+        self.details = details
+
+
+def _git(repo, *args, binary=False):
+    proc = subprocess.run(
+        ['git', '-C', str(repo), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise ProjectionError(
+            'GIT_ERROR',
+            proc.stderr.decode(errors='replace').strip() or 'git command failed',
+            args=list(args),
+            returncode=proc.returncode,
+        )
+    return proc.stdout if binary else proc.stdout.decode().strip()
+
+
+def _sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _resolve_source(repo, source_ref):
+    if source_ref:
+        return _git(repo, 'rev-parse', '--verify', f'{source_ref}^{{commit}}')
+
+    dirty = _git(repo, 'status', '--porcelain', '--untracked-files=normal')
+    if dirty:
+        raise ProjectionError(
+            'SOURCE_DIRTY',
+            'source worktree is dirty; pass --source-ref with an exact committed ref',
+        )
+    return _git(repo, 'rev-parse', '--verify', 'HEAD^{commit}')
+
+
+def _blob(repo, revision, relpath):
+    return _git(repo, 'show', f'{revision}:{relpath}', binary=True)
+
+
+def _source_mode(repo, revision, relpath):
+    row = _git(repo, 'ls-tree', revision, '--', relpath)
+    if not row:
+        raise ProjectionError('SOURCE_FILE_MISSING', f'missing source file: {relpath}')
+    mode = row.split()[0]
+    return 0o755 if mode == '100755' else 0o644
+
+
+def _existing_hash(path):
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise ProjectionError('TARGET_COLLISION', f'target path is not a file: {path}')
+    return _sha256(path.read_bytes())
+
+
+def _plan(repo, revision, target):
+    files = []
+    for relpath in PROJECTED_FILES:
+        data = _blob(repo, revision, relpath)
+        source_hash = _sha256(data)
+        dest = target / relpath
+        target_hash = _existing_hash(dest)
+        action = 'unchanged' if target_hash == source_hash else ('create' if target_hash is None else 'replace')
+        files.append(
+            {
+                'path': relpath,
+                'action': action,
+                'source_sha256': source_hash,
+                'target_sha256_before': target_hash,
+                'mode': oct(_source_mode(repo, revision, relpath)),
+                '_data': data,
+            }
+        )
+    return files
+
+
+def _stage_file(target, row):
+    fd, temp_name = tempfile.mkstemp(prefix=f".{row['path']}.", suffix='.tmp', dir=target)
+    try:
+        with os.fdopen(fd, 'wb') as fh:
+            fh.write(row['_data'])
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(temp_name, int(row['mode'], 8))
+        return pathlib.Path(temp_name)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _apply(target, files):
+    staged = []
+    try:
+        for row in files:
+            if row['action'] == 'unchanged':
+                continue
+            staged.append((row, _stage_file(target, row)))
+
+        for row, temp_path in staged:
+            os.replace(temp_path, target / row['path'])
+
+        dir_fd = os.open(target, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        for _, temp_path in staged:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _verify(target, files):
+    mismatches = []
+    for row in files:
+        actual = _existing_hash(target / row['path'])
+        if actual != row['source_sha256']:
+            mismatches.append(
+                {
+                    'path': row['path'],
+                    'expected': row['source_sha256'],
+                    'actual': actual,
+                }
+            )
+        row['target_sha256_after'] = actual
+    if mismatches:
+        raise ProjectionError('VERIFY_FAILED', 'projected file hash mismatch', mismatches=mismatches)
+
+
+def _public_rows(files):
+    return [{k: v for k, v in row.items() if not k.startswith('_')} for row in files]
+
+
+def _parser():
+    p = argparse.ArgumentParser(description='Project canonical 1F916 client files into the Jester runtime.')
+    p.add_argument('--repo', type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[2])
+    p.add_argument('--target', type=pathlib.Path, default=DEFAULT_TARGET)
+    p.add_argument('--source-ref', help='committed Git ref to project; required when the source worktree is dirty')
+    p.add_argument('--dry-run', action='store_true', help='show exact projection plan without writing')
+    return p
+
+
+def main(argv=None):
+    args = _parser().parse_args(argv)
+    repo = args.repo.resolve()
+    target = args.target.resolve()
+    try:
+        try:
+            _git(repo, 'rev-parse', '--git-dir')
+        except ProjectionError as exc:
+            raise ProjectionError('SOURCE_NOT_GIT', f'not a Git worktree: {repo}') from exc
+        if not target.is_dir():
+            raise ProjectionError('TARGET_MISSING', f'target directory does not exist: {target}')
+
+        revision = _resolve_source(repo, args.source_ref)
+        files = _plan(repo, revision, target)
+        preserved = [{'path': name, 'exists': (target / name).exists()} for name in RUNTIME_ONLY]
+        receipt = {
+            'status': 'DRY_RUN' if args.dry_run else 'VERIFIED',
+            'source_revision': revision,
+            'source_ref': args.source_ref,
+            'target': str(target),
+            'files': _public_rows(files),
+            'preserved_runtime_only': preserved,
+        }
+
+        if args.dry_run:
+            print(json.dumps(receipt, sort_keys=True))
+            return 0
+
+        _apply(target, files)
+        _verify(target, files)
+        receipt['files'] = _public_rows(files)
+        receipt['changed_files'] = [row['path'] for row in files if row['action'] != 'unchanged']
+        print(json.dumps(receipt, sort_keys=True))
+        return 0
+    except ProjectionError as exc:
+        payload = {'status': 'BLOCKED', 'code': exc.code, 'message': str(exc)}
+        payload.update(exc.details)
+        print(json.dumps(payload, sort_keys=True), file=sys.stderr)
+        return 2
+    except OSError as exc:
+        payload = {
+            'status': 'BLOCKED',
+            'code': 'PROJECTION_IO_ERROR',
+            'message': str(exc),
+        }
+        print(json.dumps(payload, sort_keys=True), file=sys.stderr)
+        return 2
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

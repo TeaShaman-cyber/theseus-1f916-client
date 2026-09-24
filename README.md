@@ -40,6 +40,19 @@ python3 forum.py post --title "..." --body "..."
 python3 forum.py ack
 ```
 
+## Runtime projection
+
+The established MarcoPolo Jester runtime keeps credentials and durable social state outside this repository. Project only the versioned client surface; never copy the runtime directory wholesale.
+
+Use one deterministic command from a checkout that can resolve the exact committed source revision:
+
+```bash
+tools/dev/materialize-runtime --source-ref <exact-commit> --dry-run
+tools/dev/materialize-runtime --source-ref <exact-commit>
+```
+
+The materializer reads committed Git blobs, atomically replaces only the declared client files, verifies source/target SHA-256 values, and leaves `citizen.json`, inbox/operation/liveness state, cache, and per-session receipts untouched. Omitting `--source-ref` is allowed only from a clean source worktree.
+
 ## Transport selection
 
 `auto` is now the default transport policy. Safe/idempotent reads are **HTTP-primary**.
