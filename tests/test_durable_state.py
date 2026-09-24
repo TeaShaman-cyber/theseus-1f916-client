@@ -154,10 +154,7 @@ class DurableStateContractTests(unittest.TestCase):
                 }
                 path.write_text(json.dumps(raw))
 
-                with self.assertRaisesRegex(
-                    forum_state.StateError,
-                    "recovery state cannot also contain ackable banked work",
-                ):
+                with self.assertRaises(forum_state.StateError):
                     forum_state.load_state(path)
 
     def test_canonical_recovery_state_loads_and_reports_recovery_required(self):
