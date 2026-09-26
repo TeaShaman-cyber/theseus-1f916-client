@@ -354,6 +354,38 @@ class CrossTransportWriteConformanceTests(unittest.TestCase):
             self.assertEqual(len(backend.calls), 3)
             self.assertEqual(ledger["operations"][0]["state"], "VERIFIED")
 
+    def test_ack_edge_429_is_not_executed_once_on_both_transports(self):
+        offered = {
+            "version": 1,
+            "timestamp": 100,
+            "comments": 10,
+            "mentions": 20,
+            "seal": "seal-a",
+        }
+
+        def prepare(state):
+            forum_state.bank_inbox_page(
+                state,
+                {"ack_cursor": offered, "since_last_visit": {}},
+                now_ms=1_000,
+            )
+
+        pair = self._run_pair(
+            ["ack"],
+            [("POST", "/api/me/ack", http_error(429))],
+            [("forum-citizen.me_ack", RuntimeError("429 rate limit"))],
+            prepare_state=prepare,
+        )
+        for label, result, backend, state_exists, ledger in pair:
+            self.assertEqual(result["status"], "RATE_LIMITED", label)
+            self.assertEqual(result["operation"], "ack")
+            self.assertEqual(result["delivery_state"], "not_executed")
+            self.assertEqual(result["recommended_backoff_seconds"], 60.0)
+            self.assertEqual(len(backend.calls), 1)
+            self.assertTrue(state_exists)
+            self.assertEqual(ledger["operations"][0]["state"], "BLOCKED")
+            self.assertFalse(ledger["operations"][0]["auto_replay_allowed"])
+
     def test_ack_progress_proof_is_write_verified_on_both_transports(self):
         offered = {
             "version": 1,

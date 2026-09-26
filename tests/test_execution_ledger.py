@@ -448,7 +448,7 @@ class ExecutionLedgerContractTests(unittest.TestCase):
             self.assertEqual(summary["states"]["VERIFIED"], 1)
             self.assertEqual(summary["states"]["RECOVERABLE"], 1)
 
-    def test_ack_transport_failure_is_recoverable_and_keeps_inbox_state(self):
+    def test_ack_edge_rate_limit_is_not_executed_and_keeps_inbox_state(self):
         with tempfile.TemporaryDirectory() as td:
             state = pathlib.Path(td) / "state.json"
             operations = pathlib.Path(td) / "operations.json"
@@ -475,11 +475,47 @@ class ExecutionLedgerContractTests(unittest.TestCase):
                 state_path=state,
                 operations_path=operations,
             )
-            self.assertEqual(result["status"], "RECOVERABLE")
+            self.assertEqual(result["status"], "RATE_LIMITED")
+            self.assertEqual(result["delivery_state"], "not_executed")
             self.assertEqual([tool for _, tool, _ in calls], ["me_ack"])
             self.assertEqual(state.read_bytes(), before)
             record = json.loads(operations.read_text())["operations"][0]
             self.assertEqual(record["operation"], "ack")
+            self.assertEqual(record["state"], "BLOCKED")
+            self.assertEqual(record["evidence"]["delivery_state"], "not_executed")
+
+    def test_ack_non_rate_limit_transport_failure_remains_recoverable(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = pathlib.Path(td) / "state.json"
+            operations = pathlib.Path(td) / "operations.json"
+            offered = {
+                "version": 1,
+                "timestamp": 100,
+                "comments": 10,
+                "mentions": 20,
+                "seal": "seal-a",
+            }
+            forum_state_data = {
+                "ack_cursor": offered,
+                "since_last_visit": {},
+            }
+            import forum_state
+            forum_state.bank_inbox_page(state, forum_state_data, now_ms=1_000)
+            before = state.read_bytes()
+
+            result = forum.execute(
+                forum.parse_args(["ack"]),
+                invoker=lambda *args, **kwargs: {
+                    "status": "BLOCKED",
+                    "error": "transport outcome ambiguous",
+                },
+                state_path=state,
+                operations_path=operations,
+            )
+
+            self.assertEqual(result["status"], "RECOVERABLE")
+            self.assertEqual(state.read_bytes(), before)
+            record = json.loads(operations.read_text())["operations"][0]
             self.assertEqual(record["state"], "RECOVERABLE")
 
     def test_vote_precondition_failure_records_blocked_without_write(self):

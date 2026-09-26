@@ -1295,6 +1295,34 @@ def execute(
             return blocked
 
         written = invoker("citizen", "me_ack", intent)
+        if written.get("status") == "RATE_LIMITED":
+            backoff = _rate_limit_backoff_seconds(written)
+            evidence = {
+                **_write_evidence(written),
+                "delivery_state": "not_executed",
+                "recommended_backoff_seconds": backoff,
+            }
+            ledger_error = _ledger_transition(
+                operations_path,
+                operation_id,
+                "BLOCKED",
+                evidence=evidence,
+                error=written.get("error") or "edge rate limit rejected ack before registry execution",
+            )
+            result = {
+                "status": "RATE_LIMITED",
+                "operation": "ack",
+                "delivery_state": "not_executed",
+                "recommended_backoff_seconds": backoff,
+                "error": written.get("error") or "edge rate limit rejected ack before registry execution",
+            }
+            if operation_id is not None:
+                result["operation_id"] = operation_id
+            if isinstance(written.get("route"), str):
+                result["route"] = written["route"]
+            if ledger_error is not None:
+                result["ledger_error"] = str(ledger_error)
+            return result
         if written.get("status") != "OK":
             ledger_error = _ledger_transition(
                 operations_path,

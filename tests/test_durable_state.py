@@ -468,7 +468,7 @@ class DurableStateContractTests(unittest.TestCase):
             self.assertIsNone(forum_state.commit_verified_ack(path, later, now_ms=4_000))
             self.assertFalse(path.exists())
 
-    def test_ack_transport_failure_keeps_banked_state(self):
+    def test_ack_edge_rate_limit_is_not_executed_and_keeps_banked_state(self):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "state.json"
             offered = cursor(100, 10, 20, "seal")
@@ -477,10 +477,16 @@ class DurableStateContractTests(unittest.TestCase):
 
             result = forum.execute(
                 forum.parse_args(["ack"]),
-                invoker=lambda *args, **kwargs: {"status": "RATE_LIMITED", "error": "429"},
+                invoker=lambda *args, **kwargs: {
+                    "status": "RATE_LIMITED",
+                    "error": "429",
+                    "route": "forum-citizen.me_ack",
+                },
                 state_path=path,
             )
-            self.assertEqual(result["status"], "RECOVERABLE")
+            self.assertEqual(result["status"], "RATE_LIMITED")
+            self.assertEqual(result["delivery_state"], "not_executed")
+            self.assertEqual(result["operation"], "ack")
             self.assertEqual(path.read_bytes(), before)
 
     def test_ack_unverified_readback_keeps_banked_state(self):
