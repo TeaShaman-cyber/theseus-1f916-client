@@ -1261,6 +1261,18 @@ def execute(
     if args.command == "thread":
         return _read_complete_thread(args.post_id, invoker)
 
+    if args.command == "inbox":
+        try:
+            summary = forum_state.state_summary(state_path)
+        except (forum_state.StateError, OSError, ValueError) as exc:
+            return {"status": "BLOCKED", "error": f"could not read durable state: {exc}"}
+        if summary.get("state") == "PENDING":
+            return {
+                "status": "BLOCKED",
+                "error": "durably banked inbox work is pending; process and ack it before fetching another inbox page",
+                "data": summary,
+            }
+
     if args.command == "ack":
         try:
             cursor = forum_state.ackable_cursor(state_path)

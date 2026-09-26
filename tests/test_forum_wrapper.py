@@ -571,89 +571,69 @@ class ForumWriteAndStateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not safely ordered"):
             self.forum.merge_ack_cursor(a, b)
 
-    def test_inbox_refuses_incomparable_sealed_offers_and_keeps_prior_state(self):
+    def test_inbox_with_pending_banked_work_refuses_before_transport(self):
         import tempfile
+        import forum_state
 
         with tempfile.TemporaryDirectory() as td:
             state = pathlib.Path(td) / "state.json"
-            first = {
+            offered = {
                 "version": 1,
                 "timestamp": 100,
                 "comments": 50,
                 "mentions": 20,
                 "seal": "seal-first",
             }
-            second = {
-                "version": 1,
-                "timestamp": 120,
-                "comments": 45,
-                "mentions": 25,
-                "seal": "seal-second",
-            }
+            forum_state.bank_inbox_page(
+                state,
+                {"ack_cursor": offered, "since_last_visit": {"marker": 1}},
+                now_ms=1_000,
+            )
 
-            first_result = self.forum.execute(
+            result = self.forum.execute(
                 self.forum.parse_args(["inbox"]),
-                invoker=lambda *args, **kwargs: {
-                    "status": "OK",
-                    "data": {"ack_cursor": first, "since_last_visit": {}},
-                },
+                invoker=lambda *args, **kwargs: (_ for _ in ()).throw(
+                    AssertionError("pending inbox must not perform another network read")
+                ),
                 state_path=state,
             )
-            self.assertEqual(first_result["status"], "OK")
 
-            second_result = self.forum.execute(
-                self.forum.parse_args(["inbox"]),
-                invoker=lambda *args, **kwargs: {
-                    "status": "OK",
-                    "data": {"ack_cursor": second, "since_last_visit": {}},
-                },
-                state_path=state,
-            )
-            self.assertEqual(second_result["status"], "BLOCKED")
-            self.assertIn("not safely ordered", second_result["error"] )
-            self.assertEqual(json.loads(state.read_text())["pending_ack"], first)
+            self.assertEqual(result["status"], "BLOCKED")
+            self.assertIn("banked inbox work is pending", result["error"] )
+            self.assertEqual(result["data"]["state"], "PENDING")
+            self.assertEqual(result["data"]["banked_reads"], 1)
 
-    def test_inbox_persists_ack_floor_and_ack_verifies_readback(self):
+    def test_inbox_persists_exact_cursor_and_ack_verifies_readback(self):
         import inspect
         self.assertIn("state_path", inspect.signature(self.forum.execute).parameters)
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             state = pathlib.Path(td) / "state.json"
-            offers = [
-                {
-                    "version": 1,
-                    "timestamp": 100,
-                    "comments": 45,
-                    "mentions": 20,
-                    "seal": "seal-floor",
-                },
-                {
-                    "version": 1,
-                    "timestamp": 120,
-                    "comments": 45,
-                    "mentions": 20,
-                    "seal": "seal-later",
-                },
-            ]
+            offered = {
+                "version": 1,
+                "timestamp": 100,
+                "comments": 45,
+                "mentions": 20,
+                "seal": "seal-exact",
+            }
 
-            for offered in offers:
-                def inbox_invoker(server, tool, payload, offered=offered, **kwargs):
-                    self.assertEqual((server, tool), ("citizen", "me"))
-                    return {
-                        "status": "OK",
-                        "data": {"ack_cursor": offered, "since_last_visit": {}},
-                    }
-                result = self.forum.execute(
-                    self.forum.parse_args(["inbox"]), invoker=inbox_invoker, state_path=state
-                )
-                self.assertEqual(result["status"], "OK")
+            def inbox_invoker(server, tool, payload, **kwargs):
+                self.assertEqual((server, tool), ("citizen", "me"))
+                return {
+                    "status": "OK",
+                    "data": {"ack_cursor": offered, "since_last_visit": {}},
+                }
 
+            result = self.forum.execute(
+                self.forum.parse_args(["inbox"]), invoker=inbox_invoker, state_path=state
+            )
+            self.assertEqual(result["status"], "OK")
             saved = json.loads(state.read_text())["pending_ack"]
-            floor = offers[0]
-            self.assertEqual(saved, floor)
-            self.assertEqual(saved["seal"], "seal-floor")
+            self.assertEqual(saved, offered)
+            self.assertEqual(saved["seal"], "seal-exact")
 
             calls = []
+
             def ack_invoker(server, tool, payload, **kwargs):
                 calls.append((server, tool, payload))
                 if tool == "me_ack":
@@ -676,12 +656,8 @@ class ForumWriteAndStateTests(unittest.TestCase):
                 self.forum.parse_args(["ack"]), invoker=ack_invoker, state_path=state
             )
             self.assertEqual(acked["status"], "WRITE_VERIFIED")
-            self.assertTrue(state.exists())
-            remaining = json.loads(state.read_text())
-            self.assertEqual(remaining["pending_ack"], offers[1])
-            self.assertEqual(len(remaining["banked_reads"]), 1)
-            self.assertEqual(remaining["banked_reads"][0]["ack_cursor"], offers[1])
-            self.assertEqual(calls[0], ("citizen", "me_ack", {"up_to": floor}))
+            self.assertFalse(state.exists())
+            self.assertEqual(calls[0], ("citizen", "me_ack", {"up_to": offered}))
 
     def test_post_and_comment_writes_require_public_readback(self):
         import inspect
