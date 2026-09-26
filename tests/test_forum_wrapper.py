@@ -571,7 +571,7 @@ class ForumWriteAndStateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not safely ordered"):
             self.forum.merge_ack_cursor(a, b)
 
-    def test_inbox_with_pending_banked_work_refuses_before_transport(self):
+    def test_inbox_replays_single_pending_banked_work_before_transport(self):
         import tempfile
         import forum_state
 
@@ -598,10 +598,11 @@ class ForumWriteAndStateTests(unittest.TestCase):
                 state_path=state,
             )
 
-            self.assertEqual(result["status"], "BLOCKED")
-            self.assertIn("banked inbox work is pending", result["error"] )
-            self.assertEqual(result["data"]["state"], "PENDING")
-            self.assertEqual(result["data"]["banked_reads"], 1)
+            self.assertEqual(result["status"], "OK")
+            self.assertTrue(result["durable_replay"])
+            self.assertEqual(result["data"]["ack_cursor"], offered)
+            self.assertEqual(result["data"]["since_last_visit"], {"marker": 1})
+            self.assertEqual(result["data"]["replay_source"], "durable_bank")
 
     def test_inbox_persists_exact_cursor_and_ack_verifies_readback(self):
         import inspect

@@ -1267,11 +1267,15 @@ def execute(
         except (forum_state.StateError, OSError, ValueError) as exc:
             return {"status": "BLOCKED", "error": f"could not read durable state: {exc}"}
         if summary.get("state") == "PENDING":
-            return {
-                "status": "BLOCKED",
-                "error": "durably banked inbox work is pending; process and ack it before fetching another inbox page",
-                "data": summary,
-            }
+            try:
+                replay = forum_state.replay_pending_inbox(state_path)
+            except forum_state.StateError as exc:
+                return {
+                    "status": "BLOCKED",
+                    "error": f"could not replay durably banked inbox work: {exc}",
+                    "data": summary,
+                }
+            return {"status": "OK", "durable_replay": True, "data": replay}
 
     if args.command == "ack":
         try:
