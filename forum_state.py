@@ -215,6 +215,24 @@ def bank_inbox_page(state_path, data, now_ms=None):
     return next_state
 
 
+def replay_pending_inbox(state_path):
+    state = load_state(state_path)
+    if state.get("recovery") is not None:
+        raise StateError("durable state recovery is required before inbox replay")
+    rows = state.get("banked_reads") or []
+    if not rows:
+        raise StateError("no durably banked inbox work is pending")
+    if len(rows) != 1:
+        raise StateError("multiple durably banked inbox pages require explicit recovery; refusing to collapse them")
+    row = rows[0]
+    return {
+        "ack_cursor": copy.deepcopy(row["ack_cursor"]),
+        "since_last_visit": copy.deepcopy(row["since_last_visit"]),
+        "replay_source": "durable_bank",
+        "banked_at_ms": int(row["banked_at_ms"]),
+    }
+
+
 def ackable_cursor(state_path):
     state = load_state(state_path)
     if state.get("recovery") is not None:

@@ -271,6 +271,42 @@ class DurableStateContractTests(unittest.TestCase):
             self.assertEqual(result["data"]["state"], "PENDING")
             self.assertEqual(result["data"]["banked_reads"], 1)
 
+    def test_replay_pending_inbox_returns_exact_single_banked_page(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            offered = cursor(100, 10, 20, "seal")
+            data = inbox_data(offered, 7)
+            forum_state.bank_inbox_page(path, data, now_ms=1_000)
+
+            replay = forum_state.replay_pending_inbox(path)
+
+            self.assertEqual(replay["ack_cursor"], offered)
+            self.assertEqual(replay["since_last_visit"], data["since_last_visit"])
+            self.assertEqual(replay["replay_source"], "durable_bank")
+            self.assertEqual(replay["banked_at_ms"], 1_000)
+
+    def test_replay_pending_inbox_refuses_empty_or_recovery_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            with self.assertRaisesRegex(forum_state.StateError, "no durably banked inbox work"):
+                forum_state.replay_pending_inbox(path)
+
+            legacy = cursor(100, 10, 20, "legacy")
+            path.write_text(json.dumps({"pending_ack": legacy}))
+            with self.assertRaisesRegex(forum_state.StateError, "recovery is required"):
+                forum_state.replay_pending_inbox(path)
+
+    def test_replay_pending_inbox_refuses_multiple_banked_pages(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            first = cursor(100, 10, 20, "first")
+            second = cursor(120, 11, 21, "second")
+            forum_state.bank_inbox_page(path, inbox_data(first, 1), now_ms=1_000)
+            forum_state.bank_inbox_page(path, inbox_data(second, 2), now_ms=2_000)
+
+            with self.assertRaisesRegex(forum_state.StateError, "multiple durably banked inbox pages"):
+                forum_state.replay_pending_inbox(path)
+
     def test_ack_refuses_recovery_only_state_without_transport(self):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "state.json"
