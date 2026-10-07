@@ -222,9 +222,11 @@ def replay_pending_inbox(state_path):
     rows = state.get("banked_reads") or []
     if not rows:
         raise StateError("no durably banked inbox work is pending")
-    if len(rows) != 1:
-        raise StateError("multiple durably banked inbox pages require explicit recovery; refusing to collapse them")
-    row = rows[0]
+    pending = state.get("pending_ack")
+    matches = [row for row in rows if row["ack_cursor"] == pending]
+    if len(matches) != 1:
+        raise StateError("pending ack floor must match exactly one durably banked inbox page")
+    row = matches[0]
     return {
         "ack_cursor": copy.deepcopy(row["ack_cursor"]),
         "since_last_visit": copy.deepcopy(row["since_last_visit"]),

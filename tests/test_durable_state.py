@@ -296,15 +296,57 @@ class DurableStateContractTests(unittest.TestCase):
             with self.assertRaisesRegex(forum_state.StateError, "recovery is required"):
                 forum_state.replay_pending_inbox(path)
 
-    def test_replay_pending_inbox_refuses_multiple_banked_pages(self):
+    def test_replay_pending_inbox_drains_multiple_banked_pages_in_order(self):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "state.json"
             first = cursor(100, 10, 20, "first")
             second = cursor(120, 11, 21, "second")
-            forum_state.bank_inbox_page(path, inbox_data(first, 1), now_ms=1_000)
-            forum_state.bank_inbox_page(path, inbox_data(second, 2), now_ms=2_000)
+            first_data = inbox_data(first, 1)
+            second_data = inbox_data(second, 2)
+            forum_state.bank_inbox_page(path, first_data, now_ms=1_000)
+            forum_state.bank_inbox_page(path, second_data, now_ms=2_000)
 
-            with self.assertRaisesRegex(forum_state.StateError, "multiple durably banked inbox pages"):
+            replay = forum_state.replay_pending_inbox(path)
+            self.assertEqual(replay["ack_cursor"], first)
+            self.assertEqual(replay["since_last_visit"], first_data["since_last_visit"])
+            self.assertEqual(replay["banked_at_ms"], 1_000)
+
+            forum_state.commit_verified_ack(path, first, now_ms=3_000)
+            replay = forum_state.replay_pending_inbox(path)
+            self.assertEqual(replay["ack_cursor"], second)
+            self.assertEqual(replay["since_last_visit"], second_data["since_last_visit"])
+            self.assertEqual(replay["banked_at_ms"], 2_000)
+
+    def test_replay_pending_inbox_follows_exact_floor_when_later_offer_is_lower(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            first = cursor(120, 11, 21, "first-higher")
+            later_lower = cursor(100, 10, 20, "later-lower")
+            first_data = inbox_data(first, 1)
+            lower_data = inbox_data(later_lower, 2)
+            forum_state.bank_inbox_page(path, first_data, now_ms=1_000)
+            forum_state.bank_inbox_page(path, lower_data, now_ms=2_000)
+
+            replay = forum_state.replay_pending_inbox(path)
+            self.assertEqual(replay["ack_cursor"], later_lower)
+            self.assertEqual(replay["since_last_visit"], lower_data["since_last_visit"])
+
+            forum_state.commit_verified_ack(path, later_lower, now_ms=3_000)
+            replay = forum_state.replay_pending_inbox(path)
+            self.assertEqual(replay["ack_cursor"], first)
+            self.assertEqual(replay["since_last_visit"], first_data["since_last_visit"])
+
+    def test_replay_pending_inbox_rejects_duplicate_exact_floor_pages(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            exact = cursor(100, 10, 20, "same-sealed-offer")
+            forum_state.bank_inbox_page(path, inbox_data(exact, 1), now_ms=1_000)
+            forum_state.bank_inbox_page(path, inbox_data(exact, 2), now_ms=2_000)
+
+            with self.assertRaisesRegex(
+                forum_state.StateError,
+                "exactly one durably banked inbox page",
+            ):
                 forum_state.replay_pending_inbox(path)
 
     def test_ack_refuses_recovery_only_state_without_transport(self):
