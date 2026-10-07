@@ -336,6 +336,19 @@ class DurableStateContractTests(unittest.TestCase):
             self.assertEqual(replay["ack_cursor"], first)
             self.assertEqual(replay["since_last_visit"], first_data["since_last_visit"])
 
+    def test_replay_pending_inbox_rejects_duplicate_exact_floor_pages(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = pathlib.Path(td) / "state.json"
+            exact = cursor(100, 10, 20, "same-sealed-offer")
+            forum_state.bank_inbox_page(path, inbox_data(exact, 1), now_ms=1_000)
+            forum_state.bank_inbox_page(path, inbox_data(exact, 2), now_ms=2_000)
+
+            with self.assertRaisesRegex(
+                forum_state.StateError,
+                "exactly one durably banked inbox page",
+            ):
+                forum_state.replay_pending_inbox(path)
+
     def test_ack_refuses_recovery_only_state_without_transport(self):
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "state.json"
