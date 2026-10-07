@@ -604,6 +604,50 @@ class ForumWriteAndStateTests(unittest.TestCase):
             self.assertEqual(result["data"]["since_last_visit"], {"marker": 1})
             self.assertEqual(result["data"]["replay_source"], "durable_bank")
 
+    def test_inbox_replays_oldest_of_multiple_banked_pages_before_transport(self):
+        import tempfile
+        import forum_state
+
+        with tempfile.TemporaryDirectory() as td:
+            state = pathlib.Path(td) / "state.json"
+            first = {
+                "version": 1,
+                "timestamp": 100,
+                "comments": 50,
+                "mentions": 20,
+                "seal": "seal-first",
+            }
+            second = {
+                "version": 1,
+                "timestamp": 120,
+                "comments": 55,
+                "mentions": 25,
+                "seal": "seal-second",
+            }
+            forum_state.bank_inbox_page(
+                state,
+                {"ack_cursor": first, "since_last_visit": {"marker": 1}},
+                now_ms=1_000,
+            )
+            forum_state.bank_inbox_page(
+                state,
+                {"ack_cursor": second, "since_last_visit": {"marker": 2}},
+                now_ms=2_000,
+            )
+
+            result = self.forum.execute(
+                self.forum.parse_args(["inbox"]),
+                invoker=lambda *args, **kwargs: (_ for _ in ()).throw(
+                    AssertionError("banked inbox backlog must not perform a network read")
+                ),
+                state_path=state,
+            )
+
+            self.assertEqual(result["status"], "OK")
+            self.assertTrue(result["durable_replay"])
+            self.assertEqual(result["data"]["ack_cursor"], first)
+            self.assertEqual(result["data"]["since_last_visit"], {"marker": 1})
+
     def test_inbox_persists_exact_cursor_and_ack_verifies_readback(self):
         import inspect
         self.assertIn("state_path", inspect.signature(self.forum.execute).parameters)
